@@ -1,13 +1,10 @@
 import re
-import os
 from io import BytesIO
-from collections import Counter
 
-import pandas as pd
 import streamlit as st
+import pandas as pd
 
 from pypdf import PdfReader
-from docx import Document
 
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
@@ -22,7 +19,6 @@ from reportlab.platypus import (
 )
 from reportlab.lib import colors
 from reportlab.lib.styles import getSampleStyleSheet
-from reportlab.lib.enums import TA_CENTER
 
 
 # =========================================================
@@ -30,22 +26,152 @@ from reportlab.lib.enums import TA_CENTER
 # =========================================================
 
 st.set_page_config(
-    page_title="PaperIQ | Research Paper Analyzer",
-    page_icon="📚",
-    layout="wide"
+    page_title="ResearchGap Finder",
+    page_icon="🔬",
+    layout="wide",
+    initial_sidebar_state="expanded"
 )
 
 
 # =========================================================
-# SKILLS / RESEARCH KEYWORDS
+# CSS
+# =========================================================
+
+st.markdown("""
+<style>
+
+.main {
+    background-color: #f8fafc;
+}
+
+.block-container {
+    padding-top: 2rem;
+    padding-bottom: 3rem;
+    max-width: 1400px;
+}
+
+/* Header */
+
+.hero {
+    padding: 28px;
+    border-radius: 18px;
+    background: linear-gradient(
+        135deg,
+        #111827,
+        #1e293b
+    );
+    color: white;
+    margin-bottom: 25px;
+}
+
+.hero h1 {
+    font-size: 38px;
+    margin-bottom: 5px;
+}
+
+.hero p {
+    color: #cbd5e1;
+    font-size: 16px;
+}
+
+/* Cards */
+
+.card {
+    padding: 20px;
+    border-radius: 16px;
+    background: white;
+    border: 1px solid #e2e8f0;
+    margin-bottom: 15px;
+}
+
+.card-title {
+    font-size: 15px;
+    color: #64748b;
+    margin-bottom: 5px;
+}
+
+.card-value {
+    font-size: 28px;
+    font-weight: 700;
+    color: #0f172a;
+}
+
+/* Section */
+
+.section-title {
+    font-size: 24px;
+    font-weight: 700;
+    color: #0f172a;
+    margin-top: 25px;
+    margin-bottom: 15px;
+}
+
+/* Gap */
+
+.gap-box {
+    padding: 18px;
+    border-left: 5px solid #ef4444;
+    background: #fff7f7;
+    border-radius: 10px;
+    margin-bottom: 10px;
+}
+
+.future-box {
+    padding: 18px;
+    border-left: 5px solid #3b82f6;
+    background: #f5f9ff;
+    border-radius: 10px;
+    margin-bottom: 10px;
+}
+
+/* Keyword */
+
+.keyword {
+    display: inline-block;
+    padding: 7px 12px;
+    margin: 4px;
+    border-radius: 20px;
+    background: #eef2ff;
+    color: #3730a3;
+    font-size: 14px;
+}
+
+/* Footer */
+
+.footer {
+    text-align: center;
+    color: #64748b;
+    padding: 30px;
+    margin-top: 50px;
+}
+
+</style>
+""", unsafe_allow_html=True)
+
+
+# =========================================================
+# SESSION STATE
+# =========================================================
+
+if "paper_text" not in st.session_state:
+    st.session_state.paper_text = ""
+
+if "paper_name" not in st.session_state:
+    st.session_state.paper_name = ""
+
+if "analysis_done" not in st.session_state:
+    st.session_state.analysis_done = False
+
+
+# =========================================================
+# RESEARCH KEYWORDS
 # =========================================================
 
 RESEARCH_KEYWORDS = [
-    "artificial intelligence",
     "machine learning",
     "deep learning",
+    "artificial intelligence",
     "natural language processing",
-    "nlp",
     "computer vision",
     "neural network",
     "convolutional neural network",
@@ -54,110 +180,45 @@ RESEARCH_KEYWORDS = [
     "bert",
     "llm",
     "large language model",
-    "generative ai",
     "classification",
     "regression",
     "clustering",
     "sentiment analysis",
-    "text classification",
     "image classification",
     "object detection",
-    "semantic analysis",
     "feature extraction",
-    "tf-idf",
-    "word embedding",
-    "dataset",
-    "accuracy",
-    "precision",
-    "recall",
-    "f1 score",
-    "f1-score",
-    "experiment",
-    "evaluation",
-    "methodology",
-    "research",
+    "transfer learning",
+    "reinforcement learning",
+    "data mining",
+    "data science",
+    "recommendation system",
+    "generative ai",
+    "computer science",
     "algorithm",
-    "prediction",
     "optimization",
-    "data analysis",
-    "python",
-    "tensorflow",
-    "pytorch",
-    "scikit-learn"
+    "prediction",
+    "dataset"
 ]
-
-
-# =========================================================
-# SESSION STATE
-# =========================================================
-
-defaults = {
-    "document_text": "",
-    "file_name": "",
-    "summary": "",
-    "keywords": [],
-    "sections": {},
-    "analysis_df": None,
-    "similarity": None,
-    "question_answer": "",
-    "document_stats": {},
-    "comparison_text": ""
-}
-
-for key, value in defaults.items():
-
-    if key not in st.session_state:
-
-        st.session_state[key] = value
 
 
 # =========================================================
 # TEXT EXTRACTION
 # =========================================================
 
-def extract_text(file):
+def extract_pdf_text(uploaded_file):
 
-    name = file.name.lower()
+    reader = PdfReader(uploaded_file)
 
-    if name.endswith(".pdf"):
+    pages = []
 
-        reader = PdfReader(file)
+    for page in reader.pages:
 
-        pages = []
+        text = page.extract_text()
 
-        for page in reader.pages:
+        if text:
+            pages.append(text)
 
-            try:
-
-                text = page.extract_text()
-
-                if text:
-
-                    pages.append(text)
-
-            except Exception:
-
-                continue
-
-        return "\n".join(pages)
-
-    elif name.endswith(".docx"):
-
-        doc = Document(file)
-
-        return "\n".join(
-            paragraph.text
-            for paragraph in doc.paragraphs
-        )
-
-    elif name.endswith(".txt"):
-
-        return file.read().decode(
-            "utf-8",
-            errors="ignore"
-        )
-
-    return ""
+    return "\n".join(pages)
 
 
 # =========================================================
@@ -166,10 +227,10 @@ def extract_text(file):
 
 def clean_text(text):
 
-    text = text.replace("\x00", " ")
+    text = re.sub(r"\s+", " ", text)
 
     text = re.sub(
-        r"\s+",
+        r"[^A-Za-z0-9.,;:!?()\-% ]",
         " ",
         text
     )
@@ -178,20 +239,20 @@ def clean_text(text):
 
 
 # =========================================================
-# BASIC STATISTICS
+# STATISTICS
 # =========================================================
 
 def calculate_statistics(text):
 
-    words = re.findall(
-        r"\b[a-zA-Z]+\b",
-        text.lower()
-    )
+    words = re.findall(r"\b\w+\b", text)
 
-    sentences = re.split(
-        r"[.!?]+",
-        text
-    )
+    sentences = re.split(r"[.!?]+", text)
+
+    sentences = [
+        s.strip()
+        for s in sentences
+        if s.strip()
+    ]
 
     paragraphs = [
         p.strip()
@@ -200,17 +261,82 @@ def calculate_statistics(text):
     ]
 
     return {
-        "Words": len(words),
-        "Characters": len(text),
-        "Sentences": len(
-            [s for s in sentences if s.strip()]
-        ),
-        "Paragraphs": len(paragraphs)
+        "words": len(words),
+        "sentences": len(sentences),
+        "characters": len(text),
+        "paragraphs": len(paragraphs)
     }
 
 
 # =========================================================
-# EXTRACT RESEARCH SECTIONS
+# KEYWORD EXTRACTION
+# =========================================================
+
+def extract_keywords(text):
+
+    lower_text = text.lower()
+
+    found = []
+
+    for keyword in RESEARCH_KEYWORDS:
+
+        pattern = r"\b" + re.escape(keyword) + r"\b"
+
+        matches = re.findall(
+            pattern,
+            lower_text
+        )
+
+        if matches:
+            found.append(
+                (keyword, len(matches))
+            )
+
+    found.sort(
+        key=lambda x: x[1],
+        reverse=True
+    )
+
+    return found[:15]
+
+
+# =========================================================
+# TF-IDF KEYWORDS
+# =========================================================
+
+def tfidf_keywords(text, top_n=15):
+
+    try:
+
+        vectorizer = TfidfVectorizer(
+            stop_words="english",
+            max_features=100
+        )
+
+        matrix = vectorizer.fit_transform([text])
+
+        scores = matrix.toarray()[0]
+
+        words = vectorizer.get_feature_names_out()
+
+        data = list(
+            zip(words, scores)
+        )
+
+        data.sort(
+            key=lambda x: x[1],
+            reverse=True
+        )
+
+        return data[:top_n]
+
+    except:
+
+        return []
+
+
+# =========================================================
+# SECTION DETECTION
 # =========================================================
 
 def extract_sections(text):
@@ -218,226 +344,324 @@ def extract_sections(text):
     sections = {}
 
     patterns = {
-        "Abstract": r"\babstract\b",
-        "Introduction": r"\bintroduction\b",
-        "Methodology": r"\b(methodology|methods|method)\b",
-        "Results": r"\b(results|findings)\b",
-        "Discussion": r"\bdiscussion\b",
-        "Conclusion": r"\b(conclusion|conclusions)\b",
-        "References": r"\b(references|bibliography)\b"
+        "Abstract": r"abstract(.*?)(?=introduction|keywords|1\.|background|$)",
+        "Introduction": r"(?:introduction|1\.\s*introduction)(.*?)(?=methodology|methods|2\.|literature review|$)",
+        "Methodology": r"(?:methodology|methods|2\.\s*methods)(.*?)(?=results|3\.|experiments|$)",
+        "Results": r"(?:results|3\.\s*results)(.*?)(?=discussion|conclusion|4\.|$)",
+        "Discussion": r"(?:discussion|4\.\s*discussion)(.*?)(?=conclusion|5\.|$)",
+        "Conclusion": r"(?:conclusion|5\.\s*conclusion)(.*?)(?=references|$)"
     }
 
-    lines = text.splitlines()
+    lower = text.lower()
 
-    current_section = None
+    for name, pattern in patterns.items():
 
-    for line in lines:
-
-        clean = line.strip()
-
-        if not clean:
-            continue
-
-        detected = None
-
-        for section, pattern in patterns.items():
-
-            if re.fullmatch(
-                pattern,
-                clean,
-                re.I
-            ):
-
-                detected = section
-                break
-
-        if detected:
-
-            current_section = detected
-
-            sections[current_section] = []
-
-            continue
-
-        if current_section:
-
-            sections[current_section].append(
-                clean
-            )
-
-    final_sections = {}
-
-    for section, content in sections.items():
-
-        final_sections[section] = "\n".join(
-            content[:30]
+        match = re.search(
+            pattern,
+            lower,
+            re.S
         )
 
-    return final_sections
+        if match:
+
+            content = match.group(1).strip()
+
+            if len(content) > 50:
+
+                sections[name] = content[:5000]
+
+    return sections
 
 
 # =========================================================
-# KEYWORD EXTRACTION
+# GAP DETECTION
 # =========================================================
 
-def extract_keywords(text, top_n=15):
+def detect_research_gaps(text):
 
-    text_lower = text.lower()
-
-    found = []
-
-    for keyword in RESEARCH_KEYWORDS:
-
-        if keyword in text_lower:
-
-            count = text_lower.count(keyword)
-
-            found.append(
-                {
-                    "Keyword": keyword,
-                    "Frequency": count
-                }
-            )
-
-    found = sorted(
-        found,
-        key=lambda x: x["Frequency"],
-        reverse=True
+    sentences = re.split(
+        r"(?<=[.!?])\s+",
+        text
     )
 
-    return found[:top_n]
+    gap_words = [
+        "limitation",
+        "limitations",
+        "challenge",
+        "challenges",
+        "however",
+        "future research",
+        "future work",
+        "lack",
+        "limited",
+        "shortcoming",
+        "drawback",
+        "problem",
+        "remain",
+        "remains",
+        "not addressed",
+        "further research"
+    ]
 
+    gaps = []
 
-# =========================================================
-# TF-IDF TOP WORDS
-# =========================================================
+    for sentence in sentences:
 
-def tfidf_keywords(text, top_n=20):
+        sentence_clean = sentence.strip()
 
-    try:
+        if len(sentence_clean) < 40:
+            continue
 
-        vectorizer = TfidfVectorizer(
-            stop_words="english",
-            ngram_range=(1, 2),
-            max_features=1000
-        )
+        lower = sentence_clean.lower()
 
-        matrix = vectorizer.fit_transform(
-            [text]
-        )
-
-        features = vectorizer.get_feature_names_out()
-
-        scores = matrix.toarray()[0]
-
-        data = []
-
-        for word, score in zip(
-            features,
-            scores
+        if any(
+            word in lower
+            for word in gap_words
         ):
 
-            if score > 0:
+            gaps.append(
+                sentence_clean
+            )
 
-                data.append(
-                    {
-                        "Term": word,
-                        "TF-IDF Score": round(
-                            float(score),
-                            4
-                        )
-                    }
-                )
+    # remove duplicates
 
-        df = pd.DataFrame(data)
+    unique = []
 
-        if not df.empty:
+    for item in gaps:
 
-            df = df.sort_values(
-                "TF-IDF Score",
-                ascending=False
-            ).head(top_n)
+        if item not in unique:
 
-        return df
+            unique.append(item)
 
-    except Exception:
-
-        return pd.DataFrame(
-            columns=[
-                "Term",
-                "TF-IDF Score"
-            ]
-        )
+    return unique[:10]
 
 
 # =========================================================
-# TEXT SIMILARITY
+# FUTURE WORK
 # =========================================================
 
-def calculate_similarity(
-    text1,
-    text2
-):
+def detect_future_work(text):
 
-    try:
+    sentences = re.split(
+        r"(?<=[.!?])\s+",
+        text
+    )
 
-        vectorizer = TfidfVectorizer(
-            stop_words="english",
-            ngram_range=(1, 2)
-        )
+    future_words = [
+        "future work",
+        "future research",
+        "in future",
+        "future studies",
+        "further research",
+        "further studies",
+        "will investigate",
+        "should investigate",
+        "can be extended",
+        "could be extended",
+        "future direction"
+    ]
 
-        matrix = vectorizer.fit_transform(
-            [
-                text1,
-                text2
-            ]
-        )
+    future = []
 
-        similarity = cosine_similarity(
-            matrix[0:1],
-            matrix[1:2]
-        )[0][0]
+    for sentence in sentences:
 
-        return similarity * 100
+        sentence = sentence.strip()
 
-    except Exception:
+        if len(sentence) < 40:
+            continue
+
+        lower = sentence.lower()
+
+        if any(
+            word in lower
+            for word in future_words
+        ):
+
+            future.append(sentence)
+
+    return future[:8]
+
+
+# =========================================================
+# TOPIC DETECTION
+# =========================================================
+
+def detect_topic(keywords):
+
+    if not keywords:
+
+        return "General Research"
+
+    top = keywords[0][0]
+
+    topic_map = {
+
+        "machine learning": "Machine Learning",
+
+        "deep learning": "Deep Learning",
+
+        "artificial intelligence": "Artificial Intelligence",
+
+        "natural language processing":
+            "Natural Language Processing",
+
+        "computer vision":
+            "Computer Vision",
+
+        "transformer":
+            "Transformers / NLP",
+
+        "bert":
+            "NLP / BERT",
+
+        "llm":
+            "Large Language Models",
+
+        "large language model":
+            "Large Language Models",
+
+        "classification":
+            "Machine Learning Classification",
+
+        "recommendation system":
+            "Recommendation Systems",
+
+        "generative ai":
+            "Generative AI"
+    }
+
+    return topic_map.get(
+        top,
+        "Artificial Intelligence / Computing"
+    )
+
+
+# =========================================================
+# READABILITY
+# =========================================================
+
+def readability_score(text):
+
+    words = re.findall(
+        r"\b\w+\b",
+        text
+    )
+
+    sentences = re.split(
+        r"[.!?]+",
+        text
+    )
+
+    sentences = [
+        s for s in sentences
+        if s.strip()
+    ]
+
+    if not words or not sentences:
 
         return 0
 
+    avg_words = len(words) / len(sentences)
+
+    score = max(
+        0,
+        min(
+            100,
+            100 - (avg_words * 2)
+        )
+    )
+
+    return round(score, 1)
+
 
 # =========================================================
-# CREATE PDF REPORT
+# SIMILARITY SEARCH
 # =========================================================
 
-def create_pdf_report(
-    filename,
-    stats,
-    sections,
+def search_paper(text, query):
+
+    paragraphs = re.split(
+        r"\n+",
+        text
+    )
+
+    paragraphs = [
+        p.strip()
+        for p in paragraphs
+        if len(p.strip()) > 50
+    ]
+
+    if not paragraphs:
+
+        return []
+
+    try:
+
+        documents = paragraphs + [query]
+
+        vectorizer = TfidfVectorizer(
+            stop_words="english"
+        )
+
+        matrix = vectorizer.fit_transform(
+            documents
+        )
+
+        similarity = cosine_similarity(
+            matrix[-1],
+            matrix[:-1]
+        )[0]
+
+        results = []
+
+        for i, score in enumerate(similarity):
+
+            results.append(
+                (
+                    paragraphs[i],
+                    score
+                )
+            )
+
+        results.sort(
+            key=lambda x: x[1],
+            reverse=True
+        )
+
+        return results[:5]
+
+    except:
+
+        return []
+
+
+# =========================================================
+# PDF REPORT
+# =========================================================
+
+def create_report(
+    paper_name,
+    statistics,
+    topic,
     keywords,
-    tfidf_df,
-    similarity=None
+    gaps,
+    future_work
 ):
 
     buffer = BytesIO()
 
     doc = SimpleDocTemplate(
         buffer,
-        pagesize=A4,
-        rightMargin=36,
-        leftMargin=36,
-        topMargin=36,
-        bottomMargin=36
+        pagesize=A4
     )
 
     styles = getSampleStyleSheet()
-
-    styles["Title"].alignment = TA_CENTER
 
     story = []
 
     story.append(
         Paragraph(
-            "Research Paper Analysis Report",
+            "ResearchGap Finder Report",
             styles["Title"]
         )
     )
@@ -448,7 +672,7 @@ def create_pdf_report(
 
     story.append(
         Paragraph(
-            f"<b>Document:</b> {filename}",
+            f"<b>Paper:</b> {paper_name}",
             styles["Normal"]
         )
     )
@@ -457,91 +681,56 @@ def create_pdf_report(
         Spacer(1, 15)
     )
 
-    # -----------------------------------------------------
-    # DOCUMENT STATISTICS
-    # -----------------------------------------------------
-
     story.append(
         Paragraph(
-            "Document Statistics",
-            styles["Heading2"]
+            f"<b>Detected Research Area:</b> {topic}",
+            styles["Normal"]
         )
     )
-
-    stats_rows = [
-        ["Metric", "Value"]
-    ]
-
-    for key, value in stats.items():
-
-        stats_rows.append(
-            [
-                key,
-                str(value)
-            ]
-        )
-
-    table = Table(
-        stats_rows,
-        colWidths=[
-            200,
-            300
-        ]
-    )
-
-    table.setStyle(
-        TableStyle(
-            [
-                (
-                    "GRID",
-                    (0, 0),
-                    (-1, -1),
-                    0.5,
-                    colors.grey
-                ),
-                (
-                    "BACKGROUND",
-                    (0, 0),
-                    (-1, 0),
-                    colors.lightgrey
-                )
-            ]
-        )
-    )
-
-    story.append(table)
 
     story.append(
         Spacer(1, 15)
     )
 
-    # -----------------------------------------------------
-    # SIMILARITY
-    # -----------------------------------------------------
+    data = [
+        ["Metric", "Value"],
+        ["Words", statistics["words"]],
+        ["Sentences", statistics["sentences"]],
+        ["Characters", statistics["characters"]],
+        ["Paragraphs", statistics["paragraphs"]]
+    ]
 
-    if similarity is not None:
+    table = Table(data)
 
-        story.append(
-            Paragraph(
-                "Document Similarity",
-                styles["Heading2"]
+    table.setStyle(
+        TableStyle([
+            (
+                "BACKGROUND",
+                (0, 0),
+                (-1, 0),
+                colors.lightgrey
+            ),
+            (
+                "GRID",
+                (0, 0),
+                (-1, -1),
+                0.5,
+                colors.grey
+            ),
+            (
+                "PADDING",
+                (0, 0),
+                (-1, -1),
+                6
             )
-        )
+        ])
+    )
 
-        story.append(
-            Paragraph(
-                f"{similarity:.2f}%",
-                styles["Normal"]
-            )
-        )
+    story.append(table)
 
-        story.append(
-            Spacer(1, 12)
-        )
-
-    # -----------------------------------------------------
-    # KEYWORDS
-    # -----------------------------------------------------
+    story.append(
+        Spacer(1, 20)
+    )
 
     story.append(
         Paragraph(
@@ -551,113 +740,63 @@ def create_pdf_report(
     )
 
     keyword_text = ", ".join(
-        item["Keyword"]
-        for item in keywords
+        [k[0] for k in keywords]
     )
 
     story.append(
         Paragraph(
-            keyword_text or "No keywords detected.",
+            keyword_text or "No keywords found.",
             styles["Normal"]
         )
     )
 
     story.append(
-        Spacer(1, 12)
+        Spacer(1, 15)
     )
 
-    # -----------------------------------------------------
-    # SECTIONS
-    # -----------------------------------------------------
+    story.append(
+        Paragraph(
+            "Potential Research Gaps",
+            styles["Heading2"]
+        )
+    )
 
-    for title, content in sections.items():
+    for gap in gaps:
 
         story.append(
             Paragraph(
-                title,
-                styles["Heading2"]
-            )
-        )
-
-        safe_content = (
-            content
-            .replace("&", "&amp;")
-            .replace("<", "&lt;")
-            .replace(">", "&gt;")
-            .replace("\n", "<br/>")
-        )
-
-        story.append(
-            Paragraph(
-                safe_content[:5000]
-                if safe_content
-                else "Not Found",
+                "• " + gap,
                 styles["Normal"]
             )
         )
 
         story.append(
-            Spacer(1, 10)
+            Spacer(1, 5)
         )
 
-    # -----------------------------------------------------
-    # TF-IDF
-    # -----------------------------------------------------
+    story.append(
+        Spacer(1, 10)
+    )
 
     story.append(
         Paragraph(
-            "Top TF-IDF Terms",
+            "Future Work",
             styles["Heading2"]
         )
     )
 
-    if not tfidf_df.empty:
+    for item in future_work:
 
-        rows = [
-            [
-                "Term",
-                "TF-IDF Score"
-            ]
-        ]
-
-        for _, row in tfidf_df.iterrows():
-
-            rows.append(
-                [
-                    row["Term"],
-                    str(row["TF-IDF Score"])
-                ]
-            )
-
-        table = Table(
-            rows,
-            colWidths=[
-                350,
-                150
-            ]
-        )
-
-        table.setStyle(
-            TableStyle(
-                [
-                    (
-                        "GRID",
-                        (0, 0),
-                        (-1, -1),
-                        0.5,
-                        colors.grey
-                    ),
-                    (
-                        "BACKGROUND",
-                        (0, 0),
-                        (-1, 0),
-                        colors.lightgrey
-                    )
-                ]
+        story.append(
+            Paragraph(
+                "• " + item,
+                styles["Normal"]
             )
         )
 
-        story.append(table)
+        story.append(
+            Spacer(1, 5)
+        )
 
     doc.build(story)
 
@@ -667,78 +806,15 @@ def create_pdf_report(
 
 
 # =========================================================
-# CSS
-# =========================================================
-
-st.markdown(
-    """
-    <style>
-
-    .block-container {
-        max-width: 1400px;
-        padding-top: 2rem;
-    }
-
-    .hero {
-        padding: 30px;
-        border-radius: 20px;
-        margin-bottom: 25px;
-        border: 1px solid rgba(128,128,128,0.25);
-        background: rgba(128,128,128,0.08);
-    }
-
-    .hero h1 {
-        font-size: 42px;
-        margin-bottom: 5px;
-    }
-
-    .hero p {
-        font-size: 16px;
-        color: #777;
-    }
-
-    .kpi {
-        border: 1px solid rgba(128,128,128,0.3);
-        border-radius: 15px;
-        padding: 18px;
-        text-align: center;
-        background: rgba(128,128,128,0.05);
-    }
-
-    .kpi-label {
-        font-size: 12px;
-        opacity: .7;
-        text-transform: uppercase;
-    }
-
-    .kpi-value {
-        font-size: 28px;
-        font-weight: 800;
-    }
-
-    .keyword-box {
-        border: 1px solid rgba(128,128,128,0.25);
-        border-radius: 12px;
-        padding: 15px;
-        margin-bottom: 10px;
-    }
-
-    </style>
-    """,
-    unsafe_allow_html=True
-)
-
-
-# =========================================================
 # SIDEBAR
 # =========================================================
 
 with st.sidebar:
 
-    st.title("📚 PaperIQ")
+    st.markdown("## 🔬 ResearchGap Finder")
 
     st.caption(
-        "Research Paper Analyzer"
+        "NLP-powered research paper analysis"
     )
 
     st.divider()
@@ -747,16 +823,48 @@ with st.sidebar:
         "Navigation",
         [
             "🏠 Dashboard",
-            "📤 Analyze Paper",
-            "📝 Summary",
-            "🔍 Keywords",
+            "📄 Analyze Paper",
+            "⚠️ Research Gaps",
+            "🔑 Keywords",
+            "🔍 Search Paper",
             "📊 Analytics",
-            "❓ Ask Paper",
-            "🔗 Compare Papers",
-            "📋 Paper Sections",
+            "📥 Report",
             "ℹ️ About"
         ]
     )
+
+    st.divider()
+
+    if st.session_state.paper_name:
+
+        st.success(
+            f"Paper loaded:\n\n"
+            f"{st.session_state.paper_name}"
+        )
+
+    else:
+
+        st.info(
+            "Upload a research paper to begin."
+        )
+
+
+# =========================================================
+# HERO
+# =========================================================
+
+st.markdown("""
+<div class="hero">
+
+<h1>🔬 ResearchGap Finder</h1>
+
+<p>
+Analyze research papers, discover important topics,
+extract keywords and identify potential research gaps.
+</p>
+
+</div>
+""", unsafe_allow_html=True)
 
 
 # =========================================================
@@ -766,336 +874,415 @@ with st.sidebar:
 if page == "🏠 Dashboard":
 
     st.markdown(
-        """
-        <div class="hero">
-
-        <h1>📚 PaperIQ</h1>
-
-        <p>
-        Research Paper Analysis & NLP Assistant
-        </p>
-
-        <p>
-        Upload academic papers, analyze their content,
-        extract keywords, study important sections,
-        compare documents and understand research papers.
-        </p>
-
-        </div>
-        """,
+        '<div class="section-title">Research Intelligence Dashboard</div>',
         unsafe_allow_html=True
     )
 
-    if not st.session_state.document_text:
+    if not st.session_state.paper_text:
 
         st.info(
-            "Go to **Analyze Paper** and upload "
-            "a research paper to get started."
+            "👈 Go to **Analyze Paper** and upload a PDF research paper."
         )
 
-        st.markdown(
-            """
-            ### ✨ Features
+        col1, col2, col3 = st.columns(3)
 
-            | Feature | Description |
-            |---|---|
-            | 📄 Paper Parsing | Extract text from PDF/DOCX/TXT |
-            | 📝 Summary | Generate paper summary |
-            | 🔍 Keywords | Find important research keywords |
-            | 📊 TF-IDF | Analyze important terms |
-            | ❓ Ask Paper | Ask questions from paper |
-            | 🔗 Compare | Compare two documents |
-            | 📋 Sections | Detect research sections |
-            | 📥 PDF Report | Download analysis report |
-            """
-        )
+        with col1:
+
+            st.markdown("""
+            <div class="card">
+
+            <div class="card-title">
+            📄 Document Analysis
+            </div>
+
+            <div class="card-value">
+            PDF
+            </div>
+
+            <p>
+            Extract and analyze research paper text.
+            </p>
+
+            </div>
+            """, unsafe_allow_html=True)
+
+        with col2:
+
+            st.markdown("""
+            <div class="card">
+
+            <div class="card-title">
+            ⚠️ Gap Detection
+            </div>
+
+            <div class="card-value">
+            NLP
+            </div>
+
+            <p>
+            Detect limitations and future research clues.
+            </p>
+
+            </div>
+            """, unsafe_allow_html=True)
+
+        with col3:
+
+            st.markdown("""
+            <div class="card">
+
+            <div class="card-title">
+            🔑 Keywords
+            </div>
+
+            <div class="card-value">
+            TF-IDF
+            </div>
+
+            <p>
+            Extract important research terms.
+            </p>
+
+            </div>
+            """, unsafe_allow_html=True)
 
     else:
 
-        stats = st.session_state.document_stats
+        text = st.session_state.paper_text
 
-        cols = st.columns(4)
+        stats = calculate_statistics(text)
 
-        metrics = [
-            (
-                "Words",
-                f"{stats.get('Words', 0):,}"
-            ),
-            (
-                "Sentences",
-                stats.get(
-                    "Sentences",
-                    0
-                )
-            ),
-            (
-                "Keywords",
-                len(
-                    st.session_state.keywords
-                )
-            ),
-            (
-                "Sections",
-                len(
-                    st.session_state.sections
-                )
-            )
-        ]
+        keywords = extract_keywords(text)
 
-        for col, (label, value) in zip(
-            cols,
-            metrics
-        ):
+        topic = detect_topic(keywords)
 
-            col.markdown(
+        gaps = detect_research_gaps(text)
+
+        future = detect_future_work(text)
+
+        col1, col2, col3, col4 = st.columns(4)
+
+        with col1:
+
+            st.markdown(
                 f"""
-                <div class="kpi">
-
-                <div class="kpi-label">
-                {label}
-                </div>
-
-                <div class="kpi-value">
-                {value}
-                </div>
-
+                <div class="card">
+                <div class="card-title">Words</div>
+                <div class="card-value">{stats["words"]:,}</div>
                 </div>
                 """,
                 unsafe_allow_html=True
             )
+
+        with col2:
+
+            st.markdown(
+                f"""
+                <div class="card">
+                <div class="card-title">Sentences</div>
+                <div class="card-value">{stats["sentences"]:,}</div>
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
+
+        with col3:
+
+            st.markdown(
+                f"""
+                <div class="card">
+                <div class="card-title">Keywords</div>
+                <div class="card-value">{len(keywords)}</div>
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
+
+        with col4:
+
+            st.markdown(
+                f"""
+                <div class="card">
+                <div class="card-title">Potential Gaps</div>
+                <div class="card-value">{len(gaps)}</div>
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
+
+        st.markdown(
+            f"### 🎯 Detected Research Area: **{topic}**"
+        )
+
+        st.progress(
+            min(
+                len(gaps) / 10,
+                1.0
+            )
+        )
+
+        st.caption(
+            "The gap count represents sentences containing "
+            "common limitation/future-research indicators."
+        )
 
 
 # =========================================================
 # ANALYZE PAPER
 # =========================================================
 
-elif page == "📤 Analyze Paper":
+elif page == "📄 Analyze Paper":
 
-    st.title(
-        "📤 Analyze Research Paper"
+    st.markdown(
+        '<div class="section-title">Upload Research Paper</div>',
+        unsafe_allow_html=True
     )
 
     uploaded_file = st.file_uploader(
-        "Upload Research Paper",
-        type=[
-            "pdf",
-            "docx",
-            "txt"
-        ]
+        "Upload a PDF research paper",
+        type=["pdf"]
     )
 
-    if st.button(
-        "🚀 Analyze Paper",
-        type="primary",
-        use_container_width=True
-    ):
-
-        if not uploaded_file:
-
-            st.error(
-                "Please upload a research paper."
-            )
-
-            st.stop()
-
-        with st.spinner(
-            "Reading and analyzing document..."
-        ):
-
-            raw_text = extract_text(
-                uploaded_file
-            )
-
-            text = clean_text(
-                raw_text
-            )
-
-            if not text:
-
-                st.error(
-                    "Could not extract readable text."
-                )
-
-                st.stop()
-
-            sections = extract_sections(
-                raw_text
-            )
-
-            keywords = extract_keywords(
-                text
-            )
-
-            stats = calculate_statistics(
-                text
-            )
-
-            tfidf_df = tfidf_keywords(
-                text
-            )
-
-            st.session_state.document_text = text
-
-            st.session_state.file_name = (
-                uploaded_file.name
-            )
-
-            st.session_state.sections = sections
-
-            st.session_state.keywords = keywords
-
-            st.session_state.document_stats = stats
-
-            st.session_state.analysis_df = (
-                tfidf_df
-            )
-
-            st.session_state.summary = ""
-
-            st.session_state.question_answer = ""
-
-        st.success(
-            "Research paper analyzed successfully!"
-        )
-
-        st.write("")
-
-        cols = st.columns(4)
-
-        for col, (key, value) in zip(
-            cols,
-            stats.items()
-        ):
-
-            col.metric(
-                key,
-                f"{value:,}"
-                if isinstance(value, int)
-                else value
-            )
-
-
-# =========================================================
-# SUMMARY
-# =========================================================
-
-elif page == "📝 Summary":
-
-    st.title(
-        "📝 Research Paper Summary"
-    )
-
-    if not st.session_state.document_text:
+    if uploaded_file:
 
         st.info(
-            "Analyze a paper first."
+            f"📄 Selected: {uploaded_file.name}"
+        )
+
+        if st.button(
+            "🚀 Analyze Research Paper",
+            type="primary",
+            use_container_width=True
+        ):
+
+            with st.spinner(
+                "Extracting and analyzing paper..."
+            ):
+
+                text = extract_pdf_text(
+                    uploaded_file
+                )
+
+                text = clean_text(text)
+
+                if len(text) < 100:
+
+                    st.error(
+                        "Could not extract enough text from this PDF."
+                    )
+
+                else:
+
+                    st.session_state.paper_text = text
+
+                    st.session_state.paper_name = (
+                        uploaded_file.name
+                    )
+
+                    st.session_state.analysis_done = True
+
+                    st.success(
+                        "✅ Research paper analyzed successfully!"
+                    )
+
+                    st.rerun()
+
+
+    if st.session_state.paper_text:
+
+        st.divider()
+
+        text = st.session_state.paper_text
+
+        stats = calculate_statistics(text)
+
+        keywords = extract_keywords(text)
+
+        topic = detect_topic(keywords)
+
+        sections = extract_sections(text)
+
+        col1, col2, col3, col4 = st.columns(4)
+
+        with col1:
+
+            st.metric(
+                "Total Words",
+                f"{stats['words']:,}"
+            )
+
+        with col2:
+
+            st.metric(
+                "Sentences",
+                f"{stats['sentences']:,}"
+            )
+
+        with col3:
+
+            st.metric(
+                "Characters",
+                f"{stats['characters']:,}"
+            )
+
+        with col4:
+
+            st.metric(
+                "Detected Topic",
+                topic
+            )
+
+        st.markdown("### 📑 Paper Sections")
+
+        for section, content in sections.items():
+
+            with st.expander(section):
+
+                st.write(
+                    content[:2000]
+                )
+
+
+# =========================================================
+# RESEARCH GAPS
+# =========================================================
+
+elif page == "⚠️ Research Gaps":
+
+    st.markdown(
+        '<div class="section-title">Potential Research Gaps</div>',
+        unsafe_allow_html=True
+    )
+
+    if not st.session_state.paper_text:
+
+        st.warning(
+            "Please upload a research paper first."
         )
 
     else:
 
-        st.write(
-            f"📄 {st.session_state.file_name}"
+        gaps = detect_research_gaps(
+            st.session_state.paper_text
         )
 
-        if st.button(
-            "✨ Generate Summary",
-            type="primary"
-        ):
+        future = detect_future_work(
+            st.session_state.paper_text
+        )
 
-            # Simple extractive summary
-            text = st.session_state.document_text
+        st.subheader(
+            f"⚠️ Potential Gaps Found: {len(gaps)}"
+        )
 
-            sentences = re.split(
-                r"(?<=[.!?])\s+",
-                text
+        if gaps:
+
+            for gap in gaps:
+
+                st.markdown(
+                    f"""
+                    <div class="gap-box">
+                    <b>Potential Gap</b><br><br>
+                    {gap}
+                    </div>
+                    """,
+                    unsafe_allow_html=True
+                )
+
+        else:
+
+            st.info(
+                "No obvious limitation-related sentences were detected."
             )
 
-            sentences = [
-                s.strip()
-                for s in sentences
-                if len(s.strip()) > 40
-            ]
+        st.markdown(
+            "### 🔮 Future Research Directions"
+        )
 
-            if sentences:
+        if future:
 
-                vectorizer = TfidfVectorizer(
-                    stop_words="english"
+            for item in future:
+
+                st.markdown(
+                    f"""
+                    <div class="future-box">
+                    {item}
+                    </div>
+                    """,
+                    unsafe_allow_html=True
                 )
 
-                matrix = vectorizer.fit_transform(
-                    sentences
-                )
+        else:
 
-                scores = matrix.sum(
-                    axis=1
-                ).A1
-
-                count = min(
-                    8,
-                    len(sentences)
-                )
-
-                indices = scores.argsort()[
-                    -count:
-                ][::-1]
-
-                selected = [
-                    sentences[i]
-                    for i in sorted(indices)
-                ]
-
-                summary = "\n\n".join(
-                    selected
-                )
-
-                st.session_state.summary = (
-                    summary
-                )
-
-            else:
-
-                st.session_state.summary = (
-                    "Not enough text available "
-                    "for summary."
-                )
-
-        if st.session_state.summary:
-
-            st.markdown(
-                "### 📖 Summary"
+            st.info(
+                "No explicit future-work sentences were detected."
             )
 
-            st.write(
-                st.session_state.summary
-            )
+        st.caption(
+            "Important: these are NLP-based indicators, "
+            "not verified scientific research gaps."
+        )
 
 
 # =========================================================
 # KEYWORDS
 # =========================================================
 
-elif page == "🔍 Keywords":
+elif page == "🔑 Keywords":
 
-    st.title(
-        "🔍 Important Research Keywords"
+    st.markdown(
+        '<div class="section-title">Research Keywords</div>',
+        unsafe_allow_html=True
     )
 
-    if not st.session_state.document_text:
+    if not st.session_state.paper_text:
 
-        st.info(
-            "Analyze a paper first."
+        st.warning(
+            "Upload a paper first."
         )
 
     else:
 
-        keywords = (
-            st.session_state.keywords
-        )
+        text = st.session_state.paper_text
+
+        keywords = extract_keywords(text)
+
+        tfidf = tfidf_keywords(text)
+
+        st.subheader("🎯 Research Keywords")
 
         if keywords:
 
+            for word, count in keywords:
+
+                st.markdown(
+                    f"""
+                    <span class="keyword">
+                    {word} · {count}
+                    </span>
+                    """,
+                    unsafe_allow_html=True
+                )
+
+        else:
+
+            st.info(
+                "No predefined research keywords found."
+            )
+
+        st.divider()
+
+        st.subheader(
+            "📊 TF-IDF Important Terms"
+        )
+
+        if tfidf:
+
             df = pd.DataFrame(
-                keywords
+                tfidf,
+                columns=[
+                    "Term",
+                    "TF-IDF Score"
+                ]
             )
 
             st.dataframe(
@@ -1104,21 +1291,73 @@ elif page == "🔍 Keywords":
                 hide_index=True
             )
 
-            st.subheader(
-                "📊 Keyword Frequency"
+
+# =========================================================
+# SEARCH PAPER
+# =========================================================
+
+elif page == "🔍 Search Paper":
+
+    st.markdown(
+        '<div class="section-title">Search Inside Paper</div>',
+        unsafe_allow_html=True
+    )
+
+    if not st.session_state.paper_text:
+
+        st.warning(
+            "Upload a paper first."
+        )
+
+    else:
+
+        query = st.text_input(
+            "What do you want to find?",
+            placeholder="Example: What dataset was used?"
+        )
+
+        if query:
+
+            results = search_paper(
+                st.session_state.paper_text,
+                query
             )
 
-            st.bar_chart(
-                df.set_index(
-                    "Keyword"
-                )["Frequency"]
-            )
+            if results:
 
-        else:
+                st.subheader(
+                    "🔎 Relevant Sections"
+                )
 
-            st.warning(
-                "No predefined research keywords found."
-            )
+                for i, (paragraph, score) in enumerate(
+                    results,
+                    start=1
+                ):
+
+                    st.markdown(
+                        f"### Result {i}"
+                    )
+
+                    st.progress(
+                        min(
+                            float(score),
+                            1.0
+                        )
+                    )
+
+                    st.write(
+                        f"Similarity: **{score * 100:.1f}%**"
+                    )
+
+                    st.info(
+                        paragraph[:1500]
+                    )
+
+            else:
+
+                st.info(
+                    "No relevant content found."
+                )
 
 
 # =========================================================
@@ -1127,353 +1366,145 @@ elif page == "🔍 Keywords":
 
 elif page == "📊 Analytics":
 
-    st.title(
-        "📊 Paper Analytics"
+    st.markdown(
+        '<div class="section-title">Paper Analytics</div>',
+        unsafe_allow_html=True
     )
 
-    if not st.session_state.document_text:
+    if not st.session_state.paper_text:
 
-        st.info(
-            "Analyze a paper first."
+        st.warning(
+            "Upload a paper first."
         )
 
     else:
 
-        stats = (
-            st.session_state.document_stats
-        )
+        text = st.session_state.paper_text
 
-        st.subheader(
-            "📈 Document Statistics"
-        )
+        stats = calculate_statistics(text)
 
-        df_stats = pd.DataFrame(
-            {
-                "Metric": list(
-                    stats.keys()
-                ),
-                "Value": list(
-                    stats.values()
+        keywords = extract_keywords(text)
+
+        readability = readability_score(text)
+
+        col1, col2, col3 = st.columns(3)
+
+        with col1:
+
+            st.metric(
+                "Average Words / Sentence",
+                round(
+                    stats["words"] /
+                    max(stats["sentences"], 1),
+                    2
                 )
-            }
-        )
+            )
+
+        with col2:
+
+            st.metric(
+                "Readability Indicator",
+                f"{readability}/100"
+            )
+
+        with col3:
+
+            st.metric(
+                "Research Keywords",
+                len(keywords)
+            )
+
+        st.markdown("### 📈 Keyword Frequency")
+
+        if keywords:
+
+            df = pd.DataFrame(
+                keywords,
+                columns=[
+                    "Keyword",
+                    "Frequency"
+                ]
+            )
+
+            st.bar_chart(
+                df.set_index("Keyword")
+            )
+
+        st.markdown("### 📊 Document Statistics")
+
+        stat_df = pd.DataFrame({
+            "Metric": [
+                "Words",
+                "Sentences",
+                "Characters",
+                "Paragraphs"
+            ],
+            "Value": [
+                stats["words"],
+                stats["sentences"],
+                stats["characters"],
+                stats["paragraphs"]
+            ]
+        })
 
         st.dataframe(
-            df_stats,
+            stat_df,
             use_container_width=True,
             hide_index=True
         )
 
-        st.subheader(
-            "🔤 Top TF-IDF Terms"
-        )
-
-        tfidf_df = (
-            st.session_state.analysis_df
-        )
-
-        if tfidf_df is not None:
-
-            st.dataframe(
-                tfidf_df,
-                use_container_width=True,
-                hide_index=True
-            )
-
-            st.bar_chart(
-                tfidf_df.set_index(
-                    "Term"
-                )["TF-IDF Score"]
-            )
-
 
 # =========================================================
-# ASK PAPER
+# REPORT
 # =========================================================
 
-elif page == "❓ Ask Paper":
+elif page == "📥 Report":
 
-    st.title(
-        "❓ Ask Questions About Paper"
+    st.markdown(
+        '<div class="section-title">Research Analysis Report</div>',
+        unsafe_allow_html=True
     )
 
-    if not st.session_state.document_text:
+    if not st.session_state.paper_text:
 
-        st.info(
-            "Analyze a paper first."
+        st.warning(
+            "Upload a paper first."
         )
 
     else:
 
-        question = st.text_area(
-            "Your Question",
-            placeholder=(
-                "Example: What is the main objective "
-                "of this research?"
-            ),
-            height=130
+        text = st.session_state.paper_text
+
+        stats = calculate_statistics(text)
+
+        keywords = extract_keywords(text)
+
+        topic = detect_topic(keywords)
+
+        gaps = detect_research_gaps(text)
+
+        future = detect_future_work(text)
+
+        report = create_report(
+            st.session_state.paper_name,
+            stats,
+            topic,
+            keywords,
+            gaps,
+            future
         )
 
-        if st.button(
-            "🔎 Find Answer",
-            type="primary"
-        ):
-
-            if not question.strip():
-
-                st.warning(
-                    "Please enter a question."
-                )
-
-            else:
-
-                text = (
-                    st.session_state.document_text
-                )
-
-                paragraphs = re.split(
-                    r"(?<=[.!?])\s+",
-                    text
-                )
-
-                paragraphs = [
-                    p.strip()
-                    for p in paragraphs
-                    if p.strip()
-                ]
-
-                if paragraphs:
-
-                    try:
-
-                        vectorizer = TfidfVectorizer(
-                            stop_words="english",
-                            ngram_range=(1, 2)
-                        )
-
-                        matrix = vectorizer.fit_transform(
-                            paragraphs
-                        )
-
-                        query_vector = (
-                            vectorizer.transform(
-                                [question]
-                            )
-                        )
-
-                        scores = cosine_similarity(
-                            query_vector,
-                            matrix
-                        )[0]
-
-                        top_indices = scores.argsort()[
-                            -5:
-                        ][::-1]
-
-                        answers = []
-
-                        for index in top_indices:
-
-                            if scores[index] > 0:
-
-                                answers.append(
-                                    paragraphs[index]
-                                )
-
-                        if answers:
-
-                            st.session_state.question_answer = (
-                                "\n\n".join(
-                                    answers[:3]
-                                )
-                            )
-
-                        else:
-
-                            st.session_state.question_answer = (
-                                "No relevant information "
-                                "was found in the paper."
-                            )
-
-                    except Exception:
-
-                        st.session_state.question_answer = (
-                            "Could not analyze the question."
-                        )
-
-        if st.session_state.question_answer:
-
-            st.subheader(
-                "📖 Relevant Information"
-            )
-
-            st.write(
-                st.session_state.question_answer
-            )
-
-
-# =========================================================
-# COMPARE PAPERS
-# =========================================================
-
-elif page == "🔗 Compare Papers":
-
-    st.title(
-        "🔗 Compare Research Papers"
-    )
-
-    if not st.session_state.document_text:
-
-        st.info(
-            "Analyze your first paper before comparison."
+        st.success(
+            "Your research analysis report is ready."
         )
 
-    else:
-
-        st.write(
-            f"Current Paper: "
-            f"**{st.session_state.file_name}**"
+        st.download_button(
+            label="📥 Download PDF Report",
+            data=report,
+            file_name="research_gap_report.pdf",
+            mime="application/pdf",
+            use_container_width=True
         )
-
-        second_file = st.file_uploader(
-            "Upload second paper",
-            type=[
-                "pdf",
-                "docx",
-                "txt"
-            ],
-            key="second_paper"
-        )
-
-        if st.button(
-            "🔗 Compare Documents",
-            type="primary"
-        ):
-
-            if not second_file:
-
-                st.error(
-                    "Please upload a second paper."
-                )
-
-            else:
-
-                second_text = clean_text(
-                    extract_text(
-                        second_file
-                    )
-                )
-
-                if not second_text:
-
-                    st.error(
-                        "Could not read second paper."
-                    )
-
-                else:
-
-                    similarity = calculate_similarity(
-                        st.session_state.document_text,
-                        second_text
-                    )
-
-                    st.session_state.similarity = (
-                        similarity
-                    )
-
-                    st.session_state.comparison_text = (
-                        second_text
-                    )
-
-        if st.session_state.similarity is not None:
-
-            similarity = (
-                st.session_state.similarity
-            )
-
-            st.metric(
-                "Text Similarity",
-                f"{similarity:.2f}%"
-            )
-
-            st.progress(
-                min(
-                    similarity / 100,
-                    1.0
-                )
-            )
-
-            if similarity >= 70:
-
-                st.warning(
-                    "The two documents contain "
-                    "a high level of textual similarity."
-                )
-
-            elif similarity >= 40:
-
-                st.info(
-                    "The documents have moderate "
-                    "textual similarity."
-                )
-
-            else:
-
-                st.success(
-                    "The documents have relatively "
-                    "low textual similarity."
-                )
-
-
-# =========================================================
-# PAPER SECTIONS
-# =========================================================
-
-elif page == "📋 Paper Sections":
-
-    st.title(
-        "📋 Research Paper Sections"
-    )
-
-    if not st.session_state.document_text:
-
-        st.info(
-            "Analyze a paper first."
-        )
-
-    else:
-
-        sections = (
-            st.session_state.sections
-        )
-
-        if not sections:
-
-            st.warning(
-                "Standard research sections "
-                "could not be detected."
-            )
-
-        else:
-
-            for section, content in sections.items():
-
-                with st.expander(
-                    f"📌 {section}",
-                    expanded=False
-                ):
-
-                    if content:
-
-                        st.write(
-                            content
-                        )
-
-                    else:
-
-                        st.caption(
-                            "No content found."
-                        )
 
 
 # =========================================================
@@ -1482,108 +1513,49 @@ elif page == "📋 Paper Sections":
 
 elif page == "ℹ️ About":
 
-    st.title(
-        "ℹ️ About PaperIQ"
-    )
-
     st.markdown(
-        """
-        **PaperIQ** is an NLP-based Research Paper
-        Analysis application.
-
-        It helps students and researchers understand
-        academic papers using traditional NLP and
-        machine learning techniques.
-
-        ### 🚀 Features
-
-        - PDF / DOCX / TXT processing
-        - Research section detection
-        - Important keyword extraction
-        - TF-IDF analysis
-        - Text similarity
-        - Extractive summarization
-        - Question-based document search
-        - Paper comparison
-        - PDF report generation
-
-        ### 🛠️ Technology
-
-        **Python**
-
-        **Streamlit**
-
-        **Pandas**
-
-        **Scikit-learn**
-
-        **PyPDF**
-
-        **python-docx**
-
-        **ReportLab**
-
-        ### 🧠 NLP Techniques
-
-        - Text preprocessing
-        - TF-IDF
-        - Cosine Similarity
-        - Keyword extraction
-        - Extractive summarization
-        - Information retrieval
-
-        ### ⚠️ Note
-
-        The application provides automated text analysis
-        and should be used as a research/study assistant,
-        not as a replacement for human academic judgment.
-        """
+        '<div class="section-title">About ResearchGap Finder</div>',
+        unsafe_allow_html=True
     )
 
+    st.write("""
+    **ResearchGap Finder** is an NLP-based research paper
+    analysis application.
 
-# =========================================================
-# DOWNLOAD REPORT
-# =========================================================
+    It helps students and researchers quickly inspect
+    research papers and identify sentences that may indicate
+    limitations, challenges and future research directions.
+    """)
 
-if (
-    st.session_state.document_text
-    and page in [
-        "🏠 Dashboard",
-        "📊 Analytics",
-        "📋 Paper Sections"
-    ]
-):
+    st.markdown("### 🛠️ Technologies")
 
-    st.divider()
+    st.write("""
+    - Python
+    - Streamlit
+    - PyPDF
+    - Scikit-learn
+    - TF-IDF
+    - Cosine Similarity
+    - Regular Expressions
+    - ReportLab
+    """)
 
-    st.subheader(
-        "📥 Download Analysis Report"
-    )
+    st.markdown("### 🧠 NLP Techniques")
 
-    pdf_report = create_pdf_report(
-        st.session_state.file_name,
-        st.session_state.document_stats,
-        st.session_state.sections,
-        st.session_state.keywords,
-        st.session_state.analysis_df
-        if st.session_state.analysis_df is not None
-        else pd.DataFrame(),
-        st.session_state.similarity
-    )
+    st.write("""
+    1. Text preprocessing
+    2. Keyword extraction
+    3. TF-IDF
+    4. Text similarity
+    5. Sentence matching
+    6. Pattern-based research-gap detection
+    7. Document statistics
+    """)
 
-    safe_name = re.sub(
-        r"[^A-Za-z0-9_-]",
-        "_",
-        os.path.splitext(
-            st.session_state.file_name
-        )[0]
-    )
-
-    st.download_button(
-        "📄 Download PDF Report",
-        pdf_report,
-        file_name=f"{safe_name}_analysis_report.pdf",
-        mime="application/pdf"
+    st.info(
+        "This system provides potential research-gap indicators. "
+        "A researcher should manually verify whether a detected "
+        "point is actually a research gap."
     )
 
 
@@ -1591,19 +1563,11 @@ if (
 # FOOTER
 # =========================================================
 
-st.markdown(
-    """
-    <div style="
-        text-align:center;
-        padding:25px;
-        color:#777;
-    ">
+st.markdown("""
+<div class="footer">
 
-    📚 PaperIQ  
-    <br>
-    Research Paper Analyzer • NLP + Machine Learning
+🔬 <b>ResearchGap Finder</b><br>
+NLP-Based Research Paper Intelligence System
 
-    </div>
-    """,
-    unsafe_allow_html=True
-)
+</div>
+""", unsafe_allow_html=True)
