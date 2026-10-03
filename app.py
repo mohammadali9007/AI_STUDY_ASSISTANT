@@ -1,24 +1,11 @@
-import re
-from io import BytesIO
-
 import streamlit as st
 import pandas as pd
+import re
 
 from pypdf import PdfReader
-
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
-
-from reportlab.lib.pagesizes import A4
-from reportlab.platypus import (
-    SimpleDocTemplate,
-    Paragraph,
-    Spacer,
-    Table,
-    TableStyle
-)
-from reportlab.lib import colors
-from reportlab.lib.styles import getSampleStyleSheet
+from google import genai
 
 
 # =========================================================
@@ -26,123 +13,62 @@ from reportlab.lib.styles import getSampleStyleSheet
 # =========================================================
 
 st.set_page_config(
-    page_title="ResearchGap Finder",
-    page_icon="🔬",
-    layout="wide",
-    initial_sidebar_state="expanded"
+    page_title="DocuMind AI",
+    page_icon="🤖",
+    layout="wide"
 )
 
 
 # =========================================================
-# CSS
+# PROFESSIONAL UI
 # =========================================================
 
 st.markdown("""
 <style>
 
-.main {
-    background-color: #f8fafc;
-}
-
 .block-container {
     padding-top: 2rem;
     padding-bottom: 3rem;
-    max-width: 1400px;
 }
 
-/* Header */
+.main-title {
+    font-size: 40px;
+    font-weight: 800;
+    margin-bottom: 0;
+}
 
-.hero {
-    padding: 28px;
-    border-radius: 18px;
-    background: linear-gradient(
-        135deg,
-        #111827,
-        #1e293b
-    );
-    color: white;
+.sub-title {
+    color: #64748b;
+    font-size: 17px;
     margin-bottom: 25px;
 }
 
-.hero h1 {
-    font-size: 38px;
-    margin-bottom: 5px;
-}
-
-.hero p {
-    color: #cbd5e1;
-    font-size: 16px;
-}
-
-/* Cards */
-
-.card {
-    padding: 20px;
-    border-radius: 16px;
-    background: white;
+.info-card {
+    padding: 18px;
+    border-radius: 14px;
     border: 1px solid #e2e8f0;
-    margin-bottom: 15px;
+    background: #ffffff;
 }
 
-.card-title {
-    font-size: 15px;
-    color: #64748b;
-    margin-bottom: 5px;
+.stat-card {
+    padding: 18px;
+    border-radius: 14px;
+    background: #f8fafc;
+    border: 1px solid #e2e8f0;
+    text-align: center;
 }
 
-.card-value {
+.stat-number {
     font-size: 28px;
     font-weight: 700;
-    color: #0f172a;
 }
 
-/* Section */
-
-.section-title {
-    font-size: 24px;
-    font-weight: 700;
-    color: #0f172a;
-    margin-top: 25px;
-    margin-bottom: 15px;
-}
-
-/* Gap */
-
-.gap-box {
-    padding: 18px;
-    border-left: 5px solid #ef4444;
-    background: #fff7f7;
-    border-radius: 10px;
-    margin-bottom: 10px;
-}
-
-.future-box {
-    padding: 18px;
-    border-left: 5px solid #3b82f6;
-    background: #f5f9ff;
-    border-radius: 10px;
-    margin-bottom: 10px;
-}
-
-/* Keyword */
-
-.keyword {
-    display: inline-block;
-    padding: 7px 12px;
-    margin: 4px;
-    border-radius: 20px;
-    background: #eef2ff;
-    color: #3730a3;
-    font-size: 14px;
-}
-
-/* Footer */
-
-.footer {
-    text-align: center;
+.stat-label {
     color: #64748b;
-    padding: 30px;
-    margin-top: 50px;
+}
+
+.stButton button {
+    border-radius: 10px;
 }
 
 </style>
@@ -150,659 +76,28 @@ st.markdown("""
 
 
 # =========================================================
+# HEADER
+# =========================================================
+
+st.markdown(
+    '<div class="main-title">🤖 DocuMind AI</div>',
+    unsafe_allow_html=True
+)
+
+st.markdown(
+    '<div class="sub-title">'
+    'Intelligent TXT • PDF • CSV NLP Assistant'
+    '</div>',
+    unsafe_allow_html=True
+)
+
+
+# =========================================================
 # SESSION STATE
 # =========================================================
 
-if "paper_text" not in st.session_state:
-    st.session_state.paper_text = ""
-
-if "paper_name" not in st.session_state:
-    st.session_state.paper_name = ""
-
-if "analysis_done" not in st.session_state:
-    st.session_state.analysis_done = False
-
-
-# =========================================================
-# RESEARCH KEYWORDS
-# =========================================================
-
-RESEARCH_KEYWORDS = [
-    "machine learning",
-    "deep learning",
-    "artificial intelligence",
-    "natural language processing",
-    "computer vision",
-    "neural network",
-    "convolutional neural network",
-    "cnn",
-    "transformer",
-    "bert",
-    "llm",
-    "large language model",
-    "classification",
-    "regression",
-    "clustering",
-    "sentiment analysis",
-    "image classification",
-    "object detection",
-    "feature extraction",
-    "transfer learning",
-    "reinforcement learning",
-    "data mining",
-    "data science",
-    "recommendation system",
-    "generative ai",
-    "computer science",
-    "algorithm",
-    "optimization",
-    "prediction",
-    "dataset"
-]
-
-
-# =========================================================
-# TEXT EXTRACTION
-# =========================================================
-
-def extract_pdf_text(uploaded_file):
-
-    reader = PdfReader(uploaded_file)
-
-    pages = []
-
-    for page in reader.pages:
-
-        text = page.extract_text()
-
-        if text:
-            pages.append(text)
-
-    return "\n".join(pages)
-
-
-# =========================================================
-# CLEAN TEXT
-# =========================================================
-
-def clean_text(text):
-
-    text = re.sub(r"\s+", " ", text)
-
-    text = re.sub(
-        r"[^A-Za-z0-9.,;:!?()\-% ]",
-        " ",
-        text
-    )
-
-    return text.strip()
-
-
-# =========================================================
-# STATISTICS
-# =========================================================
-
-def calculate_statistics(text):
-
-    words = re.findall(r"\b\w+\b", text)
-
-    sentences = re.split(r"[.!?]+", text)
-
-    sentences = [
-        s.strip()
-        for s in sentences
-        if s.strip()
-    ]
-
-    paragraphs = [
-        p.strip()
-        for p in text.split("\n")
-        if p.strip()
-    ]
-
-    return {
-        "words": len(words),
-        "sentences": len(sentences),
-        "characters": len(text),
-        "paragraphs": len(paragraphs)
-    }
-
-
-# =========================================================
-# KEYWORD EXTRACTION
-# =========================================================
-
-def extract_keywords(text):
-
-    lower_text = text.lower()
-
-    found = []
-
-    for keyword in RESEARCH_KEYWORDS:
-
-        pattern = r"\b" + re.escape(keyword) + r"\b"
-
-        matches = re.findall(
-            pattern,
-            lower_text
-        )
-
-        if matches:
-            found.append(
-                (keyword, len(matches))
-            )
-
-    found.sort(
-        key=lambda x: x[1],
-        reverse=True
-    )
-
-    return found[:15]
-
-
-# =========================================================
-# TF-IDF KEYWORDS
-# =========================================================
-
-def tfidf_keywords(text, top_n=15):
-
-    try:
-
-        vectorizer = TfidfVectorizer(
-            stop_words="english",
-            max_features=100
-        )
-
-        matrix = vectorizer.fit_transform([text])
-
-        scores = matrix.toarray()[0]
-
-        words = vectorizer.get_feature_names_out()
-
-        data = list(
-            zip(words, scores)
-        )
-
-        data.sort(
-            key=lambda x: x[1],
-            reverse=True
-        )
-
-        return data[:top_n]
-
-    except:
-
-        return []
-
-
-# =========================================================
-# SECTION DETECTION
-# =========================================================
-
-def extract_sections(text):
-
-    sections = {}
-
-    patterns = {
-        "Abstract": r"abstract(.*?)(?=introduction|keywords|1\.|background|$)",
-        "Introduction": r"(?:introduction|1\.\s*introduction)(.*?)(?=methodology|methods|2\.|literature review|$)",
-        "Methodology": r"(?:methodology|methods|2\.\s*methods)(.*?)(?=results|3\.|experiments|$)",
-        "Results": r"(?:results|3\.\s*results)(.*?)(?=discussion|conclusion|4\.|$)",
-        "Discussion": r"(?:discussion|4\.\s*discussion)(.*?)(?=conclusion|5\.|$)",
-        "Conclusion": r"(?:conclusion|5\.\s*conclusion)(.*?)(?=references|$)"
-    }
-
-    lower = text.lower()
-
-    for name, pattern in patterns.items():
-
-        match = re.search(
-            pattern,
-            lower,
-            re.S
-        )
-
-        if match:
-
-            content = match.group(1).strip()
-
-            if len(content) > 50:
-
-                sections[name] = content[:5000]
-
-    return sections
-
-
-# =========================================================
-# GAP DETECTION
-# =========================================================
-
-def detect_research_gaps(text):
-
-    sentences = re.split(
-        r"(?<=[.!?])\s+",
-        text
-    )
-
-    gap_words = [
-        "limitation",
-        "limitations",
-        "challenge",
-        "challenges",
-        "however",
-        "future research",
-        "future work",
-        "lack",
-        "limited",
-        "shortcoming",
-        "drawback",
-        "problem",
-        "remain",
-        "remains",
-        "not addressed",
-        "further research"
-    ]
-
-    gaps = []
-
-    for sentence in sentences:
-
-        sentence_clean = sentence.strip()
-
-        if len(sentence_clean) < 40:
-            continue
-
-        lower = sentence_clean.lower()
-
-        if any(
-            word in lower
-            for word in gap_words
-        ):
-
-            gaps.append(
-                sentence_clean
-            )
-
-    # remove duplicates
-
-    unique = []
-
-    for item in gaps:
-
-        if item not in unique:
-
-            unique.append(item)
-
-    return unique[:10]
-
-
-# =========================================================
-# FUTURE WORK
-# =========================================================
-
-def detect_future_work(text):
-
-    sentences = re.split(
-        r"(?<=[.!?])\s+",
-        text
-    )
-
-    future_words = [
-        "future work",
-        "future research",
-        "in future",
-        "future studies",
-        "further research",
-        "further studies",
-        "will investigate",
-        "should investigate",
-        "can be extended",
-        "could be extended",
-        "future direction"
-    ]
-
-    future = []
-
-    for sentence in sentences:
-
-        sentence = sentence.strip()
-
-        if len(sentence) < 40:
-            continue
-
-        lower = sentence.lower()
-
-        if any(
-            word in lower
-            for word in future_words
-        ):
-
-            future.append(sentence)
-
-    return future[:8]
-
-
-# =========================================================
-# TOPIC DETECTION
-# =========================================================
-
-def detect_topic(keywords):
-
-    if not keywords:
-
-        return "General Research"
-
-    top = keywords[0][0]
-
-    topic_map = {
-
-        "machine learning": "Machine Learning",
-
-        "deep learning": "Deep Learning",
-
-        "artificial intelligence": "Artificial Intelligence",
-
-        "natural language processing":
-            "Natural Language Processing",
-
-        "computer vision":
-            "Computer Vision",
-
-        "transformer":
-            "Transformers / NLP",
-
-        "bert":
-            "NLP / BERT",
-
-        "llm":
-            "Large Language Models",
-
-        "large language model":
-            "Large Language Models",
-
-        "classification":
-            "Machine Learning Classification",
-
-        "recommendation system":
-            "Recommendation Systems",
-
-        "generative ai":
-            "Generative AI"
-    }
-
-    return topic_map.get(
-        top,
-        "Artificial Intelligence / Computing"
-    )
-
-
-# =========================================================
-# READABILITY
-# =========================================================
-
-def readability_score(text):
-
-    words = re.findall(
-        r"\b\w+\b",
-        text
-    )
-
-    sentences = re.split(
-        r"[.!?]+",
-        text
-    )
-
-    sentences = [
-        s for s in sentences
-        if s.strip()
-    ]
-
-    if not words or not sentences:
-
-        return 0
-
-    avg_words = len(words) / len(sentences)
-
-    score = max(
-        0,
-        min(
-            100,
-            100 - (avg_words * 2)
-        )
-    )
-
-    return round(score, 1)
-
-
-# =========================================================
-# SIMILARITY SEARCH
-# =========================================================
-
-def search_paper(text, query):
-
-    paragraphs = re.split(
-        r"\n+",
-        text
-    )
-
-    paragraphs = [
-        p.strip()
-        for p in paragraphs
-        if len(p.strip()) > 50
-    ]
-
-    if not paragraphs:
-
-        return []
-
-    try:
-
-        documents = paragraphs + [query]
-
-        vectorizer = TfidfVectorizer(
-            stop_words="english"
-        )
-
-        matrix = vectorizer.fit_transform(
-            documents
-        )
-
-        similarity = cosine_similarity(
-            matrix[-1],
-            matrix[:-1]
-        )[0]
-
-        results = []
-
-        for i, score in enumerate(similarity):
-
-            results.append(
-                (
-                    paragraphs[i],
-                    score
-                )
-            )
-
-        results.sort(
-            key=lambda x: x[1],
-            reverse=True
-        )
-
-        return results[:5]
-
-    except:
-
-        return []
-
-
-# =========================================================
-# PDF REPORT
-# =========================================================
-
-def create_report(
-    paper_name,
-    statistics,
-    topic,
-    keywords,
-    gaps,
-    future_work
-):
-
-    buffer = BytesIO()
-
-    doc = SimpleDocTemplate(
-        buffer,
-        pagesize=A4
-    )
-
-    styles = getSampleStyleSheet()
-
-    story = []
-
-    story.append(
-        Paragraph(
-            "ResearchGap Finder Report",
-            styles["Title"]
-        )
-    )
-
-    story.append(
-        Spacer(1, 15)
-    )
-
-    story.append(
-        Paragraph(
-            f"<b>Paper:</b> {paper_name}",
-            styles["Normal"]
-        )
-    )
-
-    story.append(
-        Spacer(1, 15)
-    )
-
-    story.append(
-        Paragraph(
-            f"<b>Detected Research Area:</b> {topic}",
-            styles["Normal"]
-        )
-    )
-
-    story.append(
-        Spacer(1, 15)
-    )
-
-    data = [
-        ["Metric", "Value"],
-        ["Words", statistics["words"]],
-        ["Sentences", statistics["sentences"]],
-        ["Characters", statistics["characters"]],
-        ["Paragraphs", statistics["paragraphs"]]
-    ]
-
-    table = Table(data)
-
-    table.setStyle(
-        TableStyle([
-            (
-                "BACKGROUND",
-                (0, 0),
-                (-1, 0),
-                colors.lightgrey
-            ),
-            (
-                "GRID",
-                (0, 0),
-                (-1, -1),
-                0.5,
-                colors.grey
-            ),
-            (
-                "PADDING",
-                (0, 0),
-                (-1, -1),
-                6
-            )
-        ])
-    )
-
-    story.append(table)
-
-    story.append(
-        Spacer(1, 20)
-    )
-
-    story.append(
-        Paragraph(
-            "Important Keywords",
-            styles["Heading2"]
-        )
-    )
-
-    keyword_text = ", ".join(
-        [k[0] for k in keywords]
-    )
-
-    story.append(
-        Paragraph(
-            keyword_text or "No keywords found.",
-            styles["Normal"]
-        )
-    )
-
-    story.append(
-        Spacer(1, 15)
-    )
-
-    story.append(
-        Paragraph(
-            "Potential Research Gaps",
-            styles["Heading2"]
-        )
-    )
-
-    for gap in gaps:
-
-        story.append(
-            Paragraph(
-                "• " + gap,
-                styles["Normal"]
-            )
-        )
-
-        story.append(
-            Spacer(1, 5)
-        )
-
-    story.append(
-        Spacer(1, 10)
-    )
-
-    story.append(
-        Paragraph(
-            "Future Work",
-            styles["Heading2"]
-        )
-    )
-
-    for item in future_work:
-
-        story.append(
-            Paragraph(
-                "• " + item,
-                styles["Normal"]
-            )
-        )
-
-        story.append(
-            Spacer(1, 5)
-        )
-
-    doc.build(story)
-
-    buffer.seek(0)
-
-    return buffer
+if "messages" not in st.session_state:
+    st.session_state.messages = []
 
 
 # =========================================================
@@ -811,763 +106,1022 @@ def create_report(
 
 with st.sidebar:
 
-    st.markdown("## 🔬 ResearchGap Finder")
+    st.header("⚙️ Settings")
 
-    st.caption(
-        "NLP-powered research paper analysis"
+    api_key = st.text_input(
+        "Gemini API Key",
+        type="password"
+    )
+
+    uploaded_files = st.file_uploader(
+        "📁 Upload your files",
+        type=["txt", "pdf", "csv"],
+        accept_multiple_files=True
     )
 
     st.divider()
 
-    page = st.radio(
-        "Navigation",
-        [
-            "🏠 Dashboard",
-            "📄 Analyze Paper",
-            "⚠️ Research Gaps",
-            "🔑 Keywords",
-            "🔍 Search Paper",
-            "📊 Analytics",
-            "📥 Report",
-            "ℹ️ About"
-        ]
+    st.markdown("### 💡 Examples")
+
+    st.code("show columns")
+    st.code("show column ID")
+    st.code("show row 50")
+    st.code("random row")
+    st.code("show first 10 rows")
+    st.code("show last 5 rows")
+    st.code("highest CGPA")
+    st.code("lowest CGPA")
+    st.code("average CGPA")
+    st.code("statistics CGPA")
+
+
+# =========================================================
+# DATA STORAGE
+# =========================================================
+
+documents = []
+dataframes = {}
+file_info = []
+
+
+# =========================================================
+# FILE READING
+# =========================================================
+
+if uploaded_files:
+
+    for uploaded_file in uploaded_files:
+
+        filename = uploaded_file.name
+        extension = filename.split(".")[-1].lower()
+
+        # -------------------------------------------------
+        # TXT
+        # -------------------------------------------------
+
+        if extension == "txt":
+
+            text = uploaded_file.read().decode(
+                "utf-8",
+                errors="ignore"
+            )
+
+            documents.append({
+                "file": filename,
+                "text": text
+            })
+
+            file_info.append(
+                ("📄", filename, "TXT")
+            )
+
+
+        # -------------------------------------------------
+        # PDF
+        # -------------------------------------------------
+
+        elif extension == "pdf":
+
+            reader = PdfReader(uploaded_file)
+
+            text = ""
+
+            for page in reader.pages:
+
+                page_text = page.extract_text()
+
+                if page_text:
+                    text += page_text + "\n"
+
+            documents.append({
+                "file": filename,
+                "text": text
+            })
+
+            file_info.append(
+                ("📕", filename, "PDF")
+            )
+
+
+        # -------------------------------------------------
+        # CSV
+        # -------------------------------------------------
+
+        elif extension == "csv":
+
+            df = pd.read_csv(uploaded_file)
+
+            dataframes[filename] = df
+
+            csv_text = df.astype(str).to_string()
+
+            documents.append({
+                "file": filename,
+                "text": csv_text
+            })
+
+            file_info.append(
+                ("📊", filename, "CSV")
+            )
+
+
+# =========================================================
+# FILE STATUS
+# =========================================================
+
+if uploaded_files:
+
+    st.success(
+        f"✅ {len(uploaded_files)} file(s) loaded successfully"
     )
 
-    st.divider()
-
-    if st.session_state.paper_name:
-
-        st.success(
-            f"Paper loaded:\n\n"
-            f"{st.session_state.paper_name}"
-        )
-
-    else:
-
-        st.info(
-            "Upload a research paper to begin."
-        )
-
-
-# =========================================================
-# HERO
-# =========================================================
-
-st.markdown("""
-<div class="hero">
-
-<h1>🔬 ResearchGap Finder</h1>
-
-<p>
-Analyze research papers, discover important topics,
-extract keywords and identify potential research gaps.
-</p>
-
-</div>
-""", unsafe_allow_html=True)
-
-
-# =========================================================
-# DASHBOARD
-# =========================================================
-
-if page == "🏠 Dashboard":
-
-    st.markdown(
-        '<div class="section-title">Research Intelligence Dashboard</div>',
-        unsafe_allow_html=True
+    cols = st.columns(
+        min(len(file_info), 4)
     )
 
-    if not st.session_state.paper_text:
+    for i, (icon, name, file_type) in enumerate(file_info):
 
-        st.info(
-            "👈 Go to **Analyze Paper** and upload a PDF research paper."
-        )
-
-        col1, col2, col3 = st.columns(3)
-
-        with col1:
-
-            st.markdown("""
-            <div class="card">
-
-            <div class="card-title">
-            📄 Document Analysis
-            </div>
-
-            <div class="card-value">
-            PDF
-            </div>
-
-            <p>
-            Extract and analyze research paper text.
-            </p>
-
-            </div>
-            """, unsafe_allow_html=True)
-
-        with col2:
-
-            st.markdown("""
-            <div class="card">
-
-            <div class="card-title">
-            ⚠️ Gap Detection
-            </div>
-
-            <div class="card-value">
-            NLP
-            </div>
-
-            <p>
-            Detect limitations and future research clues.
-            </p>
-
-            </div>
-            """, unsafe_allow_html=True)
-
-        with col3:
-
-            st.markdown("""
-            <div class="card">
-
-            <div class="card-title">
-            🔑 Keywords
-            </div>
-
-            <div class="card-value">
-            TF-IDF
-            </div>
-
-            <p>
-            Extract important research terms.
-            </p>
-
-            </div>
-            """, unsafe_allow_html=True)
-
-    else:
-
-        text = st.session_state.paper_text
-
-        stats = calculate_statistics(text)
-
-        keywords = extract_keywords(text)
-
-        topic = detect_topic(keywords)
-
-        gaps = detect_research_gaps(text)
-
-        future = detect_future_work(text)
-
-        col1, col2, col3, col4 = st.columns(4)
-
-        with col1:
+        with cols[i % len(cols)]:
 
             st.markdown(
                 f"""
-                <div class="card">
-                <div class="card-title">Words</div>
-                <div class="card-value">{stats["words"]:,}</div>
+                <div class="info-card">
+                    <b>{icon} {name}</b><br>
+                    <small>{file_type}</small>
                 </div>
                 """,
                 unsafe_allow_html=True
             )
 
-        with col2:
+    st.write("")
 
-            st.markdown(
-                f"""
-                <div class="card">
-                <div class="card-title">Sentences</div>
-                <div class="card-value">{stats["sentences"]:,}</div>
-                </div>
-                """,
-                unsafe_allow_html=True
-            )
 
-        with col3:
+# =========================================================
+# DATASET OVERVIEW
+# =========================================================
 
-            st.markdown(
-                f"""
-                <div class="card">
-                <div class="card-title">Keywords</div>
-                <div class="card-value">{len(keywords)}</div>
-                </div>
-                """,
-                unsafe_allow_html=True
-            )
+if dataframes:
 
-        with col4:
+    st.subheader("📊 Dataset Overview")
 
-            st.markdown(
-                f"""
-                <div class="card">
-                <div class="card-title">Potential Gaps</div>
-                <div class="card-value">{len(gaps)}</div>
-                </div>
-                """,
-                unsafe_allow_html=True
-            )
+    overview_cols = st.columns(4)
 
-        st.markdown(
-            f"### 🎯 Detected Research Area: **{topic}**"
+    total_files = len(dataframes)
+    total_rows = sum(
+        len(df) for df in dataframes.values()
+    )
+    total_columns = sum(
+        len(df.columns)
+        for df in dataframes.values()
+    )
+
+    with overview_cols[0]:
+        st.metric(
+            "CSV Files",
+            total_files
         )
 
-        st.progress(
-            min(
-                len(gaps) / 10,
-                1.0
-            )
+    with overview_cols[1]:
+        st.metric(
+            "Total Rows",
+            total_rows
         )
 
-        st.caption(
-            "The gap count represents sentences containing "
-            "common limitation/future-research indicators."
+    with overview_cols[2]:
+        st.metric(
+            "Total Columns",
+            total_columns
+        )
+
+    with overview_cols[3]:
+        st.metric(
+            "Documents",
+            len(documents)
         )
 
 
 # =========================================================
-# ANALYZE PAPER
+# CSV COMMAND ENGINE
 # =========================================================
 
-elif page == "📄 Analyze Paper":
+def csv_command(question):
 
-    st.markdown(
-        '<div class="section-title">Upload Research Paper</div>',
-        unsafe_allow_html=True
-    )
+    q = question.lower().strip()
 
-    uploaded_file = st.file_uploader(
-        "Upload a PDF research paper",
-        type=["pdf"]
-    )
+    if not dataframes:
+        return None
 
-    if uploaded_file:
 
-        st.info(
-            f"📄 Selected: {uploaded_file.name}"
-        )
+    # =====================================================
+    # SHOW COLUMNS
+    # =====================================================
 
-        if st.button(
-            "🚀 Analyze Research Paper",
-            type="primary",
-            use_container_width=True
-        ):
+    if (
+        "show columns" in q
+        or "list columns" in q
+        or "display columns" in q
+        or "column names" in q
+        or "what are the columns" in q
+    ):
 
-            with st.spinner(
-                "Extracting and analyzing paper..."
+        output = []
+
+        for filename, df in dataframes.items():
+
+            output.append(
+                f"### 📊 `{filename}`"
+            )
+
+            for number, column in enumerate(
+                df.columns,
+                1
             ):
 
-                text = extract_pdf_text(
-                    uploaded_file
+                output.append(
+                    f"{number}. `{column}`"
                 )
 
-                text = clean_text(text)
-
-                if len(text) < 100:
-
-                    st.error(
-                        "Could not extract enough text from this PDF."
-                    )
-
-                else:
-
-                    st.session_state.paper_text = text
-
-                    st.session_state.paper_name = (
-                        uploaded_file.name
-                    )
-
-                    st.session_state.analysis_done = True
-
-                    st.success(
-                        "✅ Research paper analyzed successfully!"
-                    )
-
-                    st.rerun()
+        return "\n".join(output)
 
 
-    if st.session_state.paper_text:
+    # =====================================================
+    # RANDOM ROW
+    # =====================================================
 
-        st.divider()
+    if (
+        "random row" in q
+        or "random record" in q
+        or "random data" in q
+    ):
 
-        text = st.session_state.paper_text
+        for filename, df in dataframes.items():
 
-        stats = calculate_statistics(text)
+            if df.empty:
+                return "❌ CSV file is empty."
 
-        keywords = extract_keywords(text)
-
-        topic = detect_topic(keywords)
-
-        sections = extract_sections(text)
-
-        col1, col2, col3, col4 = st.columns(4)
-
-        with col1:
-
-            st.metric(
-                "Total Words",
-                f"{stats['words']:,}"
+            row = df.sample(
+                n=1
             )
 
-        with col2:
-
-            st.metric(
-                "Sentences",
-                f"{stats['sentences']:,}"
+            return (
+                f"### 🎲 Random Row\n\n"
+                f"**File:** `{filename}`\n\n"
+                + row.to_markdown(index=False)
             )
 
-        with col3:
 
-            st.metric(
-                "Characters",
-                f"{stats['characters']:,}"
-            )
+    # =====================================================
+    # SPECIFIC ROW
+    # =====================================================
 
-        with col4:
-
-            st.metric(
-                "Detected Topic",
-                topic
-            )
-
-        st.markdown("### 📑 Paper Sections")
-
-        for section, content in sections.items():
-
-            with st.expander(section):
-
-                st.write(
-                    content[:2000]
-                )
-
-
-# =========================================================
-# RESEARCH GAPS
-# =========================================================
-
-elif page == "⚠️ Research Gaps":
-
-    st.markdown(
-        '<div class="section-title">Potential Research Gaps</div>',
-        unsafe_allow_html=True
+    match = re.search(
+        r"(?:show|display|get|give me)\s+row\s+(\d+)",
+        q
     )
 
-    if not st.session_state.paper_text:
+    if match:
 
-        st.warning(
-            "Please upload a research paper first."
+        row_number = int(
+            match.group(1)
         )
 
-    else:
+        for filename, df in dataframes.items():
 
-        gaps = detect_research_gaps(
-            st.session_state.paper_text
-        )
+            if (
+                row_number < 1
+                or row_number > len(df)
+            ):
 
-        future = detect_future_work(
-            st.session_state.paper_text
-        )
-
-        st.subheader(
-            f"⚠️ Potential Gaps Found: {len(gaps)}"
-        )
-
-        if gaps:
-
-            for gap in gaps:
-
-                st.markdown(
-                    f"""
-                    <div class="gap-box">
-                    <b>Potential Gap</b><br><br>
-                    {gap}
-                    </div>
-                    """,
-                    unsafe_allow_html=True
+                return (
+                    f"❌ Row `{row_number}` does not exist.\n\n"
+                    f"Available rows: "
+                    f"`1 - {len(df)}`"
                 )
 
-        else:
+            row = df.iloc[
+                row_number - 1
+            ].to_frame().T
 
-            st.info(
-                "No obvious limitation-related sentences were detected."
+            return (
+                f"### 🧾 Row {row_number}\n\n"
+                f"**File:** `{filename}`\n\n"
+                + row.to_markdown(index=False)
             )
 
-        st.markdown(
-            "### 🔮 Future Research Directions"
-        )
 
-        if future:
+    # =====================================================
+    # FIRST N ROWS
+    # =====================================================
 
-            for item in future:
-
-                st.markdown(
-                    f"""
-                    <div class="future-box">
-                    {item}
-                    </div>
-                    """,
-                    unsafe_allow_html=True
-                )
-
-        else:
-
-            st.info(
-                "No explicit future-work sentences were detected."
-            )
-
-        st.caption(
-            "Important: these are NLP-based indicators, "
-            "not verified scientific research gaps."
-        )
-
-
-# =========================================================
-# KEYWORDS
-# =========================================================
-
-elif page == "🔑 Keywords":
-
-    st.markdown(
-        '<div class="section-title">Research Keywords</div>',
-        unsafe_allow_html=True
+    match = re.search(
+        r"(?:show|display|get)\s+"
+        r"(?:first|top)\s+(\d+)\s+rows?",
+        q
     )
 
-    if not st.session_state.paper_text:
+    if match:
 
-        st.warning(
-            "Upload a paper first."
+        n = int(
+            match.group(1)
         )
 
-    else:
+        for filename, df in dataframes.items():
 
-        text = st.session_state.paper_text
+            n = min(
+                n,
+                len(df)
+            )
 
-        keywords = extract_keywords(text)
-
-        tfidf = tfidf_keywords(text)
-
-        st.subheader("🎯 Research Keywords")
-
-        if keywords:
-
-            for word, count in keywords:
-
-                st.markdown(
-                    f"""
-                    <span class="keyword">
-                    {word} · {count}
-                    </span>
-                    """,
-                    unsafe_allow_html=True
+            return (
+                f"### 📊 First {n} Rows\n\n"
+                + df.head(n).to_markdown(
+                    index=False
                 )
-
-        else:
-
-            st.info(
-                "No predefined research keywords found."
-            )
-
-        st.divider()
-
-        st.subheader(
-            "📊 TF-IDF Important Terms"
-        )
-
-        if tfidf:
-
-            df = pd.DataFrame(
-                tfidf,
-                columns=[
-                    "Term",
-                    "TF-IDF Score"
-                ]
-            )
-
-            st.dataframe(
-                df,
-                use_container_width=True,
-                hide_index=True
             )
 
 
-# =========================================================
-# SEARCH PAPER
-# =========================================================
+    # =====================================================
+    # LAST N ROWS
+    # =====================================================
 
-elif page == "🔍 Search Paper":
-
-    st.markdown(
-        '<div class="section-title">Search Inside Paper</div>',
-        unsafe_allow_html=True
+    match = re.search(
+        r"(?:show|display|get)\s+"
+        r"(?:last|bottom)\s+(\d+)\s+rows?",
+        q
     )
 
-    if not st.session_state.paper_text:
+    if match:
 
-        st.warning(
-            "Upload a paper first."
+        n = int(
+            match.group(1)
         )
 
-    else:
+        for filename, df in dataframes.items():
 
-        query = st.text_input(
-            "What do you want to find?",
-            placeholder="Example: What dataset was used?"
-        )
-
-        if query:
-
-            results = search_paper(
-                st.session_state.paper_text,
-                query
+            n = min(
+                n,
+                len(df)
             )
 
-            if results:
-
-                st.subheader(
-                    "🔎 Relevant Sections"
+            return (
+                f"### 📊 Last {n} Rows\n\n"
+                + df.tail(n).to_markdown(
+                    index=False
                 )
+            )
 
-                for i, (paragraph, score) in enumerate(
-                    results,
-                    start=1
+
+    # =====================================================
+    # SHOW COLUMN
+    # =====================================================
+
+    patterns = [
+
+        r"show column (.+)",
+        r"display column (.+)",
+        r"get column (.+)",
+        r"give me (.+) column",
+        r"show (.+) column",
+        r"display (.+) column"
+    ]
+
+    for pattern in patterns:
+
+        match = re.search(
+            pattern,
+            q
+        )
+
+        if match:
+
+            requested_column = (
+                match.group(1)
+                .strip()
+                .replace("?", "")
+                .strip()
+            )
+
+            for filename, df in dataframes.items():
+
+                # Exact match
+                for column in df.columns:
+
+                    if (
+                        column.lower()
+                        == requested_column.lower()
+                    ):
+
+                        values = df[[column]]
+
+                        return (
+                            f"### 📊 Column: `{column}`\n\n"
+                            f"**Total values:** "
+                            f"{len(values)}\n\n"
+                            + values.to_markdown(
+                                index=False
+                            )
+                        )
+
+                # Partial match
+                for column in df.columns:
+
+                    if (
+                        requested_column.lower()
+                        in column.lower()
+                    ):
+
+                        values = df[[column]]
+
+                        return (
+                            f"### 📊 Column: `{column}`\n\n"
+                            f"**Total values:** "
+                            f"{len(values)}\n\n"
+                            + values.to_markdown(
+                                index=False
+                            )
+                        )
+
+            return (
+                f"❌ Column `{requested_column}` "
+                f"was not found.\n\n"
+                f"Try `show columns`."
+            )
+
+
+    # =====================================================
+    # RANDOM VALUE FROM COLUMN
+    # =====================================================
+
+    match = re.search(
+        r"(?:random value from|random value of)"
+        r"\s+(.+)",
+        q
+    )
+
+    if match:
+
+        requested_column = (
+            match.group(1)
+            .strip()
+        )
+
+        for filename, df in dataframes.items():
+
+            for column in df.columns:
+
+                if (
+                    column.lower()
+                    == requested_column.lower()
                 ):
 
-                    st.markdown(
-                        f"### Result {i}"
+                    values = (
+                        df[column]
+                        .dropna()
                     )
 
-                    st.progress(
-                        min(
-                            float(score),
-                            1.0
+                    if values.empty:
+                        return (
+                            f"❌ `{column}` "
+                            f"contains no values."
                         )
+
+                    value = values.sample(
+                        1
+                    ).iloc[0]
+
+                    return (
+                        f"### 🎲 Random Value\n\n"
+                        f"**Column:** `{column}`\n\n"
+                        f"**Value:** `{value}`"
                     )
 
-                    st.write(
-                        f"Similarity: **{score * 100:.1f}%**"
+
+    # =====================================================
+    # HIGHEST
+    # =====================================================
+
+    match = re.search(
+        r"(?:highest|max|maximum)"
+        r"\s+(?:value of\s+)?(.+)",
+        q
+    )
+
+    if match:
+
+        requested_column = (
+            match.group(1)
+            .strip()
+            .replace("?", "")
+            .strip()
+        )
+
+        for filename, df in dataframes.items():
+
+            for column in df.columns:
+
+                if (
+                    column.lower()
+                    == requested_column.lower()
+                ):
+
+                    values = pd.to_numeric(
+                        df[column],
+                        errors="coerce"
+                    ).dropna()
+
+                    if values.empty:
+                        return (
+                            f"❌ `{column}` "
+                            f"is not numeric."
+                        )
+
+                    highest = values.max()
+
+                    return (
+                        f"### ⬆️ Highest Value\n\n"
+                        f"**Column:** `{column}`\n\n"
+                        f"**Highest:** `{highest}`"
                     )
 
-                    st.info(
-                        paragraph[:1500]
+
+    # =====================================================
+    # LOWEST
+    # =====================================================
+
+    match = re.search(
+        r"(?:lowest|min|minimum)"
+        r"\s+(?:value of\s+)?(.+)",
+        q
+    )
+
+    if match:
+
+        requested_column = (
+            match.group(1)
+            .strip()
+            .replace("?", "")
+            .strip()
+        )
+
+        for filename, df in dataframes.items():
+
+            for column in df.columns:
+
+                if (
+                    column.lower()
+                    == requested_column.lower()
+                ):
+
+                    values = pd.to_numeric(
+                        df[column],
+                        errors="coerce"
+                    ).dropna()
+
+                    if values.empty:
+                        return (
+                            f"❌ `{column}` "
+                            f"is not numeric."
+                        )
+
+                    lowest = values.min()
+
+                    return (
+                        f"### ⬇️ Lowest Value\n\n"
+                        f"**Column:** `{column}`\n\n"
+                        f"**Lowest:** `{lowest}`"
                     )
 
+
+    # =====================================================
+    # AVERAGE
+    # =====================================================
+
+    match = re.search(
+        r"(?:average|avg|mean)"
+        r"\s+(?:value of\s+)?(.+)",
+        q
+    )
+
+    if match:
+
+        requested_column = (
+            match.group(1)
+            .strip()
+            .replace("?", "")
+            .strip()
+        )
+
+        for filename, df in dataframes.items():
+
+            for column in df.columns:
+
+                if (
+                    column.lower()
+                    == requested_column.lower()
+                ):
+
+                    values = pd.to_numeric(
+                        df[column],
+                        errors="coerce"
+                    ).dropna()
+
+                    if values.empty:
+                        return (
+                            f"❌ `{column}` "
+                            f"is not numeric."
+                        )
+
+                    average = values.mean()
+
+                    return (
+                        f"### 📊 Average Value\n\n"
+                        f"**Column:** `{column}`\n\n"
+                        f"**Average:** "
+                        f"`{average:.2f}`"
+                    )
+
+
+    # =====================================================
+    # STATISTICS
+    # =====================================================
+
+    match = re.search(
+        r"(?:statistics|stats|summary)"
+        r"\s+(?:of\s+)?(.+)",
+        q
+    )
+
+    if match:
+
+        requested_column = (
+            match.group(1)
+            .strip()
+            .replace("?", "")
+            .strip()
+        )
+
+        for filename, df in dataframes.items():
+
+            for column in df.columns:
+
+                if (
+                    column.lower()
+                    == requested_column.lower()
+                ):
+
+                    values = pd.to_numeric(
+                        df[column],
+                        errors="coerce"
+                    ).dropna()
+
+                    if values.empty:
+                        return (
+                            f"❌ `{column}` "
+                            f"is not numeric."
+                        )
+
+                    return f"""
+### 📊 Statistics: `{column}`
+
+| Metric | Value |
+|---|---:|
+| 🔢 Count | **{len(values)}** |
+| ⬆️ Highest | **{values.max()}** |
+| ⬇️ Lowest | **{values.min()}** |
+| 📊 Average | **{values.mean():.2f}** |
+| 📌 Median | **{values.median():.2f}** |
+| ➕ Total | **{values.sum():.2f}** |
+"""
+
+
+    # =====================================================
+    # TOTAL ROWS
+    # =====================================================
+
+    if (
+        "how many rows" in q
+        or "total rows" in q
+        or "number of rows" in q
+        or "row count" in q
+    ):
+
+        result = []
+
+        for filename, df in dataframes.items():
+
+            result.append(
+                f"📊 **{filename}:** "
+                f"{len(df)} rows"
+            )
+
+        return "\n\n".join(result)
+
+
+    # =====================================================
+    # TOTAL COLUMNS
+    # =====================================================
+
+    if (
+        "how many columns" in q
+        or "total columns" in q
+        or "number of columns" in q
+    ):
+
+        result = []
+
+        for filename, df in dataframes.items():
+
+            result.append(
+                f"📊 **{filename}:** "
+                f"{len(df.columns)} columns"
+            )
+
+        return "\n\n".join(result)
+
+
+    # =====================================================
+    # DATASET INFO
+    # =====================================================
+
+    if (
+        "dataset info" in q
+        or "dataset information" in q
+        or "describe dataset" in q
+        or q == "info"
+    ):
+
+        result = []
+
+        for filename, df in dataframes.items():
+
+            missing = int(
+                df.isna().sum().sum()
+            )
+
+            result.append(
+                f"""
+### 📊 `{filename}`
+
+- 📏 Rows: **{len(df)}**
+- 📐 Columns: **{len(df.columns)}**
+- ❌ Missing Values: **{missing}**
+"""
+            )
+
+        return "\n".join(result)
+
+
+    return None
+
+
+# =========================================================
+# NLP SEARCH
+# =========================================================
+
+def search_documents(question):
+
+    if not documents:
+        return ""
+
+    texts = [
+        doc["text"]
+        for doc in documents
+    ]
+
+    try:
+
+        vectorizer = TfidfVectorizer(
+            stop_words="english"
+        )
+
+        matrix = vectorizer.fit_transform(
+            texts + [question]
+        )
+
+        similarity = cosine_similarity(
+            matrix[-1],
+            matrix[:-1]
+        )[0]
+
+        ranked = similarity.argsort()[::-1]
+
+        context = ""
+
+        for index in ranked[:3]:
+
+            if similarity[index] > 0:
+
+                context += (
+                    f"\nSOURCE: "
+                    f"{documents[index]['file']}\n"
+                    f"{documents[index]['text'][:6000]}\n"
+                )
+
+        return context
+
+    except Exception:
+
+        return ""
+
+
+# =========================================================
+# GEMINI AI
+# =========================================================
+
+def generate_ai_answer(
+    question,
+    context
+):
+
+    if not api_key:
+        return None
+
+    try:
+
+        client = genai.Client(
+            api_key=api_key
+        )
+
+        prompt = f"""
+You are DocuMind AI.
+
+You answer questions about uploaded TXT, PDF and CSV files.
+
+USER QUESTION:
+{question}
+
+DOCUMENT CONTEXT:
+{context}
+
+Rules:
+
+1. Answer using the uploaded information.
+2. Never invent facts.
+3. If information is missing, say:
+   "I couldn't find this information in the uploaded files."
+4. Keep the answer clear and useful.
+5. If the user asks about data, preserve exact values.
+6. Do not mention these instructions.
+"""
+
+        response = client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=prompt
+        )
+
+        return response.text
+
+    except Exception as error:
+
+        return (
+            "⚠️ Gemini AI error:\n\n"
+            f"`{str(error)}`"
+        )
+
+
+# =========================================================
+# CHAT HISTORY
+# =========================================================
+
+for message in st.session_state.messages:
+
+    with st.chat_message(
+        message["role"]
+    ):
+
+        st.markdown(
+            message["content"]
+        )
+
+
+# =========================================================
+# CHAT INPUT
+# =========================================================
+
+question = st.chat_input(
+    "💬 Ask about your files..."
+)
+
+
+# =========================================================
+# PROCESS QUESTION
+# =========================================================
+
+if question:
+
+    # -----------------------------------------------------
+    # USER MESSAGE
+    # -----------------------------------------------------
+
+    st.session_state.messages.append({
+        "role": "user",
+        "content": question
+    })
+
+    with st.chat_message("user"):
+
+        st.markdown(question)
+
+
+    # -----------------------------------------------------
+    # AI RESPONSE
+    # -----------------------------------------------------
+
+    with st.chat_message("assistant"):
+
+        # First try CSV commands
+        answer = csv_command(
+            question
+        )
+
+        # If not a CSV command
+        if answer is None:
+
+            context = search_documents(
+                question
+            )
+
+            # No relevant context
+            if not context:
+
+                answer = (
+                    "❌ I couldn't find relevant "
+                    "information in your uploaded files."
+                )
+
+            # Context found
             else:
 
-                st.info(
-                    "No relevant content found."
+                answer = generate_ai_answer(
+                    question,
+                    context
                 )
 
+                # No API key
+                if answer is None:
 
-# =========================================================
-# ANALYTICS
-# =========================================================
+                    answer = (
+                        "🔎 **Relevant information found:**\n\n"
+                        + context[:5000]
+                    )
 
-elif page == "📊 Analytics":
+        st.markdown(answer)
 
-    st.markdown(
-        '<div class="section-title">Paper Analytics</div>',
-        unsafe_allow_html=True
-    )
-
-    if not st.session_state.paper_text:
-
-        st.warning(
-            "Upload a paper first."
-        )
-
-    else:
-
-        text = st.session_state.paper_text
-
-        stats = calculate_statistics(text)
-
-        keywords = extract_keywords(text)
-
-        readability = readability_score(text)
-
-        col1, col2, col3 = st.columns(3)
-
-        with col1:
-
-            st.metric(
-                "Average Words / Sentence",
-                round(
-                    stats["words"] /
-                    max(stats["sentences"], 1),
-                    2
-                )
-            )
-
-        with col2:
-
-            st.metric(
-                "Readability Indicator",
-                f"{readability}/100"
-            )
-
-        with col3:
-
-            st.metric(
-                "Research Keywords",
-                len(keywords)
-            )
-
-        st.markdown("### 📈 Keyword Frequency")
-
-        if keywords:
-
-            df = pd.DataFrame(
-                keywords,
-                columns=[
-                    "Keyword",
-                    "Frequency"
-                ]
-            )
-
-            st.bar_chart(
-                df.set_index("Keyword")
-            )
-
-        st.markdown("### 📊 Document Statistics")
-
-        stat_df = pd.DataFrame({
-            "Metric": [
-                "Words",
-                "Sentences",
-                "Characters",
-                "Paragraphs"
-            ],
-            "Value": [
-                stats["words"],
-                stats["sentences"],
-                stats["characters"],
-                stats["paragraphs"]
-            ]
+        st.session_state.messages.append({
+            "role": "assistant",
+            "content": answer
         })
 
-        st.dataframe(
-            stat_df,
-            use_container_width=True,
-            hide_index=True
-        )
-
 
 # =========================================================
-# REPORT
+# EMPTY STATE
 # =========================================================
 
-elif page == "📥 Report":
-
-    st.markdown(
-        '<div class="section-title">Research Analysis Report</div>',
-        unsafe_allow_html=True
-    )
-
-    if not st.session_state.paper_text:
-
-        st.warning(
-            "Upload a paper first."
-        )
-
-    else:
-
-        text = st.session_state.paper_text
-
-        stats = calculate_statistics(text)
-
-        keywords = extract_keywords(text)
-
-        topic = detect_topic(keywords)
-
-        gaps = detect_research_gaps(text)
-
-        future = detect_future_work(text)
-
-        report = create_report(
-            st.session_state.paper_name,
-            stats,
-            topic,
-            keywords,
-            gaps,
-            future
-        )
-
-        st.success(
-            "Your research analysis report is ready."
-        )
-
-        st.download_button(
-            label="📥 Download PDF Report",
-            data=report,
-            file_name="research_gap_report.pdf",
-            mime="application/pdf",
-            use_container_width=True
-        )
-
-
-# =========================================================
-# ABOUT
-# =========================================================
-
-elif page == "ℹ️ About":
-
-    st.markdown(
-        '<div class="section-title">About ResearchGap Finder</div>',
-        unsafe_allow_html=True
-    )
-
-    st.write("""
-    **ResearchGap Finder** is an NLP-based research paper
-    analysis application.
-
-    It helps students and researchers quickly inspect
-    research papers and identify sentences that may indicate
-    limitations, challenges and future research directions.
-    """)
-
-    st.markdown("### 🛠️ Technologies")
-
-    st.write("""
-    - Python
-    - Streamlit
-    - PyPDF
-    - Scikit-learn
-    - TF-IDF
-    - Cosine Similarity
-    - Regular Expressions
-    - ReportLab
-    """)
-
-    st.markdown("### 🧠 NLP Techniques")
-
-    st.write("""
-    1. Text preprocessing
-    2. Keyword extraction
-    3. TF-IDF
-    4. Text similarity
-    5. Sentence matching
-    6. Pattern-based research-gap detection
-    7. Document statistics
-    """)
+if not uploaded_files:
 
     st.info(
-        "This system provides potential research-gap indicators. "
-        "A researcher should manually verify whether a detected "
-        "point is actually a research gap."
+        "👈 Upload a TXT, PDF or CSV file from the sidebar "
+        "to start chatting."
     )
 
+else:
 
-# =========================================================
-# FOOTER
-# =========================================================
+    if not st.session_state.messages:
 
-st.markdown("""
-<div class="footer">
+        st.markdown("### 🚀 Try asking")
 
-🔬 <b>ResearchGap Finder</b><br>
-NLP-Based Research Paper Intelligence System
+        example_cols = st.columns(3)
 
-</div>
-""", unsafe_allow_html=True)
+        with example_cols[0]:
+
+            st.markdown("""
+            **📊 CSV**
+
+            `show columns`
+
+            `show column ID`
+
+            `show row 50`
+            """)
+
+        with example_cols[1]:
+
+            st.markdown("""
+            **🎲 Data**
+
+            `random row`
+
+            `highest CGPA`
+
+            `average CGPA`
+            """)
+
+        with example_cols[2]:
+
+            st.markdown("""
+            **📚 Documents**
+
+            `What is this PDF about?`
+
+            `Summarize this document`
+            """)
