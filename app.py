@@ -1,129 +1,90 @@
-import os
 import re
-import json
-import random
+import os
+from io import BytesIO
+from collections import Counter
 
+import pandas as pd
 import streamlit as st
-import numpy as np
+
 from pypdf import PdfReader
+from docx import Document
 
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 
-from google import genai
+from reportlab.lib.pagesizes import A4
+from reportlab.platypus import (
+    SimpleDocTemplate,
+    Paragraph,
+    Spacer,
+    Table,
+    TableStyle
+)
+from reportlab.lib import colors
+from reportlab.lib.styles import getSampleStyleSheet
+from reportlab.lib.enums import TA_CENTER
 
 
 # =========================================================
-# APP CONFIG
+# PAGE CONFIG
 # =========================================================
 
 st.set_page_config(
-    page_title="AI Study Assistant",
+    page_title="PaperIQ | Research Paper Analyzer",
     page_icon="📚",
-    layout="wide",
-    initial_sidebar_state="expanded"
+    layout="wide"
 )
 
 
 # =========================================================
-# CUSTOM CSS
+# SKILLS / RESEARCH KEYWORDS
 # =========================================================
 
-st.markdown("""
-<style>
-
-.main {
-    padding-top: 1rem;
-}
-
-.block-container {
-    max-width: 1250px;
-    padding-top: 2rem;
-}
-
-h1 {
-    font-size: 2.5rem !important;
-}
-
-.subtitle {
-    color: #6b7280;
-    font-size: 1.05rem;
-    margin-bottom: 25px;
-}
-
-.stat-box {
-    padding: 18px;
-    border-radius: 12px;
-    border: 1px solid rgba(128,128,128,0.25);
-    background: rgba(128,128,128,0.06);
-    text-align: center;
-}
-
-.stat-number {
-    font-size: 1.8rem;
-    font-weight: 700;
-}
-
-.stat-label {
-    color: #6b7280;
-    font-size: 0.9rem;
-}
-
-.answer-box {
-    padding: 20px;
-    border-radius: 12px;
-    border: 1px solid rgba(128,128,128,0.25);
-    background: rgba(128,128,128,0.05);
-}
-
-.topic-box {
-    padding: 15px;
-    border-radius: 10px;
-    border: 1px solid rgba(128,128,128,0.25);
-    margin-bottom: 10px;
-}
-
-.footer {
-    text-align: center;
-    color: #777;
-    margin-top: 40px;
-    padding: 20px;
-}
-
-</style>
-""", unsafe_allow_html=True)
-
-
-# =========================================================
-# GEMINI API
-# =========================================================
-
-def get_api_key():
-
-    try:
-        return st.secrets["GEMINI_API_KEY"]
-
-    except Exception:
-        return os.getenv("GEMINI_API_KEY")
-
-
-api_key = get_api_key()
-
-
-if not api_key:
-
-    st.error(
-        "⚠️ Gemini API key not found.\n\n"
-        "Please add GEMINI_API_KEY inside "
-        ".streamlit/secrets.toml"
-    )
-
-    st.stop()
-
-
-client = genai.Client(api_key=api_key)
-
-MODEL_NAME = "gemini-2.5-flash"
+RESEARCH_KEYWORDS = [
+    "artificial intelligence",
+    "machine learning",
+    "deep learning",
+    "natural language processing",
+    "nlp",
+    "computer vision",
+    "neural network",
+    "convolutional neural network",
+    "cnn",
+    "transformer",
+    "bert",
+    "llm",
+    "large language model",
+    "generative ai",
+    "classification",
+    "regression",
+    "clustering",
+    "sentiment analysis",
+    "text classification",
+    "image classification",
+    "object detection",
+    "semantic analysis",
+    "feature extraction",
+    "tf-idf",
+    "word embedding",
+    "dataset",
+    "accuracy",
+    "precision",
+    "recall",
+    "f1 score",
+    "f1-score",
+    "experiment",
+    "evaluation",
+    "methodology",
+    "research",
+    "algorithm",
+    "prediction",
+    "optimization",
+    "data analysis",
+    "python",
+    "tensorflow",
+    "pytorch",
+    "scikit-learn"
+]
 
 
 # =========================================================
@@ -131,41 +92,17 @@ MODEL_NAME = "gemini-2.5-flash"
 # =========================================================
 
 defaults = {
-
     "document_text": "",
-
-    "chunks": [],
-
-    "vectorizer": None,
-
-    "matrix": None,
-
     "file_name": "",
-
     "summary": "",
-
-    "topics": [],
-
-    "mcqs": [],
-
-    "quiz": [],
-
-    "quiz_index": 0,
-
-    "quiz_score": 0,
-
-    "quiz_finished": False,
-
-    "quiz_started": False,
-
-    "last_answer": None,
-
-    "last_quiz_answer": None,
-
-    "quiz_submitted": False,
-
+    "keywords": [],
+    "sections": {},
+    "analysis_df": None,
+    "similarity": None,
+    "question_answer": "",
+    "document_stats": {},
+    "comparison_text": ""
 }
-
 
 for key, value in defaults.items():
 
@@ -175,27 +112,16 @@ for key, value in defaults.items():
 
 
 # =========================================================
-# TEXT CLEANING
+# TEXT EXTRACTION
 # =========================================================
 
-def clean_text(text):
+def extract_text(file):
 
-    text = text.replace("\x00", " ")
+    name = file.name.lower()
 
-    text = re.sub(r"\s+", " ", text)
+    if name.endswith(".pdf"):
 
-    return text.strip()
-
-
-# =========================================================
-# PDF TEXT EXTRACTION
-# =========================================================
-
-def extract_pdf_text(uploaded_file):
-
-    try:
-
-        reader = PdfReader(uploaded_file)
+        reader = PdfReader(file)
 
         pages = []
 
@@ -213,489 +139,594 @@ def extract_pdf_text(uploaded_file):
 
                 continue
 
-        final_text = "\n".join(pages)
+        return "\n".join(pages)
 
-        return clean_text(final_text)
+    elif name.endswith(".docx"):
 
-    except Exception as e:
+        doc = Document(file)
 
-        return ""
+        return "\n".join(
+            paragraph.text
+            for paragraph in doc.paragraphs
+        )
 
+    elif name.endswith(".txt"):
 
-# =========================================================
-# CREATE TEXT CHUNKS
-# =========================================================
+        return file.read().decode(
+            "utf-8",
+            errors="ignore"
+        )
 
-def create_chunks(
-    text,
-    chunk_size=300,
-    overlap=50
-):
-
-    words = text.split()
-
-    chunks = []
-
-    start = 0
-
-    while start < len(words):
-
-        end = start + chunk_size
-
-        chunk = " ".join(words[start:end])
-
-        if chunk.strip():
-
-            chunks.append(chunk.strip())
-
-        start = end - overlap
-
-        if start < 0:
-
-            start = 0
-
-    return chunks
+    return ""
 
 
 # =========================================================
-# BUILD TF-IDF SEARCH INDEX
+# CLEAN TEXT
 # =========================================================
 
-def build_search_index(chunks):
+def clean_text(text):
 
-    vectorizer = TfidfVectorizer(
-        stop_words="english",
-        ngram_range=(1, 2),
-        max_features=20000
+    text = text.replace("\x00", " ")
+
+    text = re.sub(
+        r"\s+",
+        " ",
+        text
     )
 
-    matrix = vectorizer.fit_transform(chunks)
-
-    return vectorizer, matrix
+    return text.strip()
 
 
 # =========================================================
-# RETRIEVE RELEVANT CONTEXT
+# BASIC STATISTICS
 # =========================================================
 
-def retrieve_context(question, top_k=6):
+def calculate_statistics(text):
 
-    if (
+    words = re.findall(
+        r"\b[a-zA-Z]+\b",
+        text.lower()
+    )
 
-        st.session_state.vectorizer is None
+    sentences = re.split(
+        r"[.!?]+",
+        text
+    )
 
-        or st.session_state.matrix is None
+    paragraphs = [
+        p.strip()
+        for p in text.split("\n")
+        if p.strip()
+    ]
 
-        or not st.session_state.chunks
+    return {
+        "Words": len(words),
+        "Characters": len(text),
+        "Sentences": len(
+            [s for s in sentences if s.strip()]
+        ),
+        "Paragraphs": len(paragraphs)
+    }
 
-    ):
 
-        return ""
+# =========================================================
+# EXTRACT RESEARCH SECTIONS
+# =========================================================
 
+def extract_sections(text):
+
+    sections = {}
+
+    patterns = {
+        "Abstract": r"\babstract\b",
+        "Introduction": r"\bintroduction\b",
+        "Methodology": r"\b(methodology|methods|method)\b",
+        "Results": r"\b(results|findings)\b",
+        "Discussion": r"\bdiscussion\b",
+        "Conclusion": r"\b(conclusion|conclusions)\b",
+        "References": r"\b(references|bibliography)\b"
+    }
+
+    lines = text.splitlines()
+
+    current_section = None
+
+    for line in lines:
+
+        clean = line.strip()
+
+        if not clean:
+            continue
+
+        detected = None
+
+        for section, pattern in patterns.items():
+
+            if re.fullmatch(
+                pattern,
+                clean,
+                re.I
+            ):
+
+                detected = section
+                break
+
+        if detected:
+
+            current_section = detected
+
+            sections[current_section] = []
+
+            continue
+
+        if current_section:
+
+            sections[current_section].append(
+                clean
+            )
+
+    final_sections = {}
+
+    for section, content in sections.items():
+
+        final_sections[section] = "\n".join(
+            content[:30]
+        )
+
+    return final_sections
+
+
+# =========================================================
+# KEYWORD EXTRACTION
+# =========================================================
+
+def extract_keywords(text, top_n=15):
+
+    text_lower = text.lower()
+
+    found = []
+
+    for keyword in RESEARCH_KEYWORDS:
+
+        if keyword in text_lower:
+
+            count = text_lower.count(keyword)
+
+            found.append(
+                {
+                    "Keyword": keyword,
+                    "Frequency": count
+                }
+            )
+
+    found = sorted(
+        found,
+        key=lambda x: x["Frequency"],
+        reverse=True
+    )
+
+    return found[:top_n]
+
+
+# =========================================================
+# TF-IDF TOP WORDS
+# =========================================================
+
+def tfidf_keywords(text, top_n=20):
 
     try:
 
-        query_vector = (
-            st.session_state.vectorizer
-            .transform([question])
+        vectorizer = TfidfVectorizer(
+            stop_words="english",
+            ngram_range=(1, 2),
+            max_features=1000
         )
 
-        scores = cosine_similarity(
-            query_vector,
-            st.session_state.matrix
-        )[0]
+        matrix = vectorizer.fit_transform(
+            [text]
+        )
 
-        top_indices = np.argsort(scores)[::-1][:top_k]
+        features = vectorizer.get_feature_names_out()
 
-        selected = []
+        scores = matrix.toarray()[0]
 
-        for index in top_indices:
+        data = []
 
-            if scores[index] > 0:
+        for word, score in zip(
+            features,
+            scores
+        ):
 
-                selected.append(
-                    st.session_state.chunks[index]
+            if score > 0:
+
+                data.append(
+                    {
+                        "Term": word,
+                        "TF-IDF Score": round(
+                            float(score),
+                            4
+                        )
+                    }
                 )
 
-        return "\n\n---\n\n".join(selected)
+        df = pd.DataFrame(data)
+
+        if not df.empty:
+
+            df = df.sort_values(
+                "TF-IDF Score",
+                ascending=False
+            ).head(top_n)
+
+        return df
 
     except Exception:
 
-        return ""
+        return pd.DataFrame(
+            columns=[
+                "Term",
+                "TF-IDF Score"
+            ]
+        )
 
 
 # =========================================================
-# GEMINI CALL
+# TEXT SIMILARITY
 # =========================================================
 
-def call_gemini(prompt):
+def calculate_similarity(
+    text1,
+    text2
+):
 
     try:
 
-        response = client.models.generate_content(
-
-            model=MODEL_NAME,
-
-            contents=prompt
-
+        vectorizer = TfidfVectorizer(
+            stop_words="english",
+            ngram_range=(1, 2)
         )
 
-        if response and response.text:
-
-            return response.text.strip()
-
-        return "No answer was generated."
-
-    except Exception as e:
-
-        return f"ERROR: {str(e)}"
-
-
-# =========================================================
-# PROCESS PDF
-# =========================================================
-
-def process_pdf(uploaded_file):
-
-    text = extract_pdf_text(uploaded_file)
-
-    if not text:
-
-        return False, "Could not extract text from this PDF."
-
-
-    chunks = create_chunks(text)
-
-
-    if not chunks:
-
-        return False, "No usable text found in this PDF."
-
-
-    try:
-
-        vectorizer, matrix = (
-            build_search_index(chunks)
+        matrix = vectorizer.fit_transform(
+            [
+                text1,
+                text2
+            ]
         )
 
-    except Exception as e:
+        similarity = cosine_similarity(
+            matrix[0:1],
+            matrix[1:2]
+        )[0][0]
 
-        return False, f"Could not build search index: {e}"
+        return similarity * 100
 
+    except Exception:
 
-    st.session_state.document_text = text
-
-    st.session_state.chunks = chunks
-
-    st.session_state.vectorizer = vectorizer
-
-    st.session_state.matrix = matrix
-
-    st.session_state.file_name = uploaded_file.name
-
-
-    # Reset old results
-
-    st.session_state.summary = ""
-
-    st.session_state.topics = []
-
-    st.session_state.mcqs = []
-
-    st.session_state.quiz = []
-
-    st.session_state.quiz_index = 0
-
-    st.session_state.quiz_score = 0
-
-    st.session_state.quiz_finished = False
-
-    st.session_state.quiz_started = False
-
-    st.session_state.last_answer = None
-
-    st.session_state.last_quiz_answer = None
-
-    st.session_state.quiz_submitted = False
-
-
-    return True, "PDF processed successfully."
+        return 0
 
 
 # =========================================================
-# ANSWER STUDENT QUESTION
+# CREATE PDF REPORT
 # =========================================================
 
-def answer_question(question):
+def create_pdf_report(
+    filename,
+    stats,
+    sections,
+    keywords,
+    tfidf_df,
+    similarity=None
+):
 
-    context = retrieve_context(
-        question,
-        top_k=6
+    buffer = BytesIO()
+
+    doc = SimpleDocTemplate(
+        buffer,
+        pagesize=A4,
+        rightMargin=36,
+        leftMargin=36,
+        topMargin=36,
+        bottomMargin=36
     )
 
+    styles = getSampleStyleSheet()
 
-    if not context:
+    styles["Title"].alignment = TA_CENTER
 
-        return (
-            "I couldn't find relevant information "
-            "in the uploaded document."
+    story = []
+
+    story.append(
+        Paragraph(
+            "Research Paper Analysis Report",
+            styles["Title"]
+        )
+    )
+
+    story.append(
+        Spacer(1, 15)
+    )
+
+    story.append(
+        Paragraph(
+            f"<b>Document:</b> {filename}",
+            styles["Normal"]
+        )
+    )
+
+    story.append(
+        Spacer(1, 15)
+    )
+
+    # -----------------------------------------------------
+    # DOCUMENT STATISTICS
+    # -----------------------------------------------------
+
+    story.append(
+        Paragraph(
+            "Document Statistics",
+            styles["Heading2"]
+        )
+    )
+
+    stats_rows = [
+        ["Metric", "Value"]
+    ]
+
+    for key, value in stats.items():
+
+        stats_rows.append(
+            [
+                key,
+                str(value)
+            ]
         )
 
-
-    prompt = f"""
-
-You are an AI Study Assistant.
-
-You must answer the student's question using
-ONLY the information available in the document context.
-
-IMPORTANT RULES:
-
-1. Do not invent information.
-2. Do not use outside knowledge.
-3. If the answer is not present in the context,
-   say clearly:
-
-   "I couldn't find this information in the uploaded document."
-
-4. Explain in simple student-friendly language.
-5. If useful, use bullet points.
-6. Give a direct answer first.
-7. Keep the answer reasonably concise.
-
-DOCUMENT CONTEXT:
-
-{context}
-
-
-STUDENT QUESTION:
-
-{question}
-
-
-ANSWER:
-
-"""
-
-
-    result = call_gemini(prompt)
-
-
-    if result.startswith("ERROR:"):
-
-        return result
-
-
-    return result
-
-
-# =========================================================
-# GENERATE SUMMARY
-# =========================================================
-
-def generate_summary():
-
-    document = st.session_state.document_text
-
-    # Limit very large documents
-
-    document = document[:50000]
-
-
-    prompt = f"""
-
-You are an AI Study Assistant.
-
-Create a useful study summary from the document.
-
-Requirements:
-
-1. Give a short overview.
-2. Explain the major concepts.
-3. Use headings.
-4. Use bullet points.
-5. Include important definitions.
-6. Include important examples when available.
-7. Keep language simple.
-8. Make it useful for exam preparation.
-9. Do not add information that is not in the document.
-
-DOCUMENT:
-
-{document}
-
-
-SUMMARY:
-
-"""
-
-
-    return call_gemini(prompt)
-
-
-# =========================================================
-# GENERATE IMPORTANT TOPICS
-# =========================================================
-
-def generate_topics():
-
-    document = st.session_state.document_text[:50000]
-
-
-    prompt = f"""
-
-Analyze the following study document.
-
-Find the most important topics that
-a student should study for an exam.
-
-Return ONLY valid JSON.
-
-Format:
-
-[
-    {{
-        "topic": "Topic name",
-        "reason": "Why this topic is important"
-    }}
-]
-
-Give around 8 to 12 topics.
-
-DOCUMENT:
-
-{document}
-
-"""
-
-
-    result = call_gemini(prompt)
-
-
-    if result.startswith("ERROR:"):
-
-        return []
-
-
-    try:
-
-        result = result.replace(
-            "```json",
-            ""
+    table = Table(
+        stats_rows,
+        colWidths=[
+            200,
+            300
+        ]
+    )
+
+    table.setStyle(
+        TableStyle(
+            [
+                (
+                    "GRID",
+                    (0, 0),
+                    (-1, -1),
+                    0.5,
+                    colors.grey
+                ),
+                (
+                    "BACKGROUND",
+                    (0, 0),
+                    (-1, 0),
+                    colors.lightgrey
+                )
+            ]
+        )
+    )
+
+    story.append(table)
+
+    story.append(
+        Spacer(1, 15)
+    )
+
+    # -----------------------------------------------------
+    # SIMILARITY
+    # -----------------------------------------------------
+
+    if similarity is not None:
+
+        story.append(
+            Paragraph(
+                "Document Similarity",
+                styles["Heading2"]
+            )
         )
 
-        result = result.replace(
-            "```",
-            ""
-        ).strip()
-
-
-        data = json.loads(result)
-
-
-        if isinstance(data, list):
-
-            return data
-
-
-    except Exception:
-
-        pass
-
-
-    return []
-
-
-# =========================================================
-# GENERATE MCQ
-# =========================================================
-
-def generate_mcqs(number=10):
-
-    document = st.session_state.document_text[:50000]
-
-
-    prompt = f"""
-
-You are an AI educational question generator.
-
-Create {number} multiple-choice questions
-from the provided document.
-
-Questions must be based ONLY on the document.
-
-Return ONLY valid JSON.
-
-Format:
-
-[
-    {{
-        "question": "Question text",
-
-        "options": [
-            "Option A",
-            "Option B",
-            "Option C",
-            "Option D"
-        ],
-
-        "answer": "Option A",
-
-        "explanation": "Short explanation"
-    }}
-]
-
-Rules:
-
-- Exactly 4 options.
-- Only one correct answer.
-- Questions must come from the document.
-- Do not use outside information.
-- Make questions useful for exam preparation.
-- Mix easy, medium and difficult questions.
-
-DOCUMENT:
-
-{document}
-
-"""
-
-
-    result = call_gemini(prompt)
-
-
-    if result.startswith("ERROR:"):
-
-        return []
-
-
-    try:
-
-        result = result.replace(
-            "```json",
-            ""
+        story.append(
+            Paragraph(
+                f"{similarity:.2f}%",
+                styles["Normal"]
+            )
         )
 
-        result = result.replace(
-            "```",
-            ""
-        ).strip()
+        story.append(
+            Spacer(1, 12)
+        )
+
+    # -----------------------------------------------------
+    # KEYWORDS
+    # -----------------------------------------------------
+
+    story.append(
+        Paragraph(
+            "Important Keywords",
+            styles["Heading2"]
+        )
+    )
+
+    keyword_text = ", ".join(
+        item["Keyword"]
+        for item in keywords
+    )
+
+    story.append(
+        Paragraph(
+            keyword_text or "No keywords detected.",
+            styles["Normal"]
+        )
+    )
+
+    story.append(
+        Spacer(1, 12)
+    )
+
+    # -----------------------------------------------------
+    # SECTIONS
+    # -----------------------------------------------------
+
+    for title, content in sections.items():
+
+        story.append(
+            Paragraph(
+                title,
+                styles["Heading2"]
+            )
+        )
+
+        safe_content = (
+            content
+            .replace("&", "&amp;")
+            .replace("<", "&lt;")
+            .replace(">", "&gt;")
+            .replace("\n", "<br/>")
+        )
+
+        story.append(
+            Paragraph(
+                safe_content[:5000]
+                if safe_content
+                else "Not Found",
+                styles["Normal"]
+            )
+        )
+
+        story.append(
+            Spacer(1, 10)
+        )
+
+    # -----------------------------------------------------
+    # TF-IDF
+    # -----------------------------------------------------
+
+    story.append(
+        Paragraph(
+            "Top TF-IDF Terms",
+            styles["Heading2"]
+        )
+    )
+
+    if not tfidf_df.empty:
+
+        rows = [
+            [
+                "Term",
+                "TF-IDF Score"
+            ]
+        ]
+
+        for _, row in tfidf_df.iterrows():
+
+            rows.append(
+                [
+                    row["Term"],
+                    str(row["TF-IDF Score"])
+                ]
+            )
+
+        table = Table(
+            rows,
+            colWidths=[
+                350,
+                150
+            ]
+        )
+
+        table.setStyle(
+            TableStyle(
+                [
+                    (
+                        "GRID",
+                        (0, 0),
+                        (-1, -1),
+                        0.5,
+                        colors.grey
+                    ),
+                    (
+                        "BACKGROUND",
+                        (0, 0),
+                        (-1, 0),
+                        colors.lightgrey
+                    )
+                ]
+            )
+        )
+
+        story.append(table)
+
+    doc.build(story)
+
+    buffer.seek(0)
+
+    return buffer
 
 
-        data = json.loads(result)
+# =========================================================
+# CSS
+# =========================================================
 
+st.markdown(
+    """
+    <style>
 
-        if isinstance(data, list):
+    .block-container {
+        max-width: 1400px;
+        padding-top: 2rem;
+    }
 
-            return data
+    .hero {
+        padding: 30px;
+        border-radius: 20px;
+        margin-bottom: 25px;
+        border: 1px solid rgba(128,128,128,0.25);
+        background: rgba(128,128,128,0.08);
+    }
 
+    .hero h1 {
+        font-size: 42px;
+        margin-bottom: 5px;
+    }
 
-    except Exception:
+    .hero p {
+        font-size: 16px;
+        color: #777;
+    }
 
-        pass
+    .kpi {
+        border: 1px solid rgba(128,128,128,0.3);
+        border-radius: 15px;
+        padding: 18px;
+        text-align: center;
+        background: rgba(128,128,128,0.05);
+    }
 
+    .kpi-label {
+        font-size: 12px;
+        opacity: .7;
+        text-transform: uppercase;
+    }
 
-    return []
+    .kpi-value {
+        font-size: 28px;
+        font-weight: 800;
+    }
+
+    .keyword-box {
+        border: 1px solid rgba(128,128,128,0.25);
+        border-radius: 12px;
+        padding: 15px;
+        margin-bottom: 10px;
+    }
+
+    </style>
+    """,
+    unsafe_allow_html=True
+)
 
 
 # =========================================================
@@ -704,519 +735,129 @@ DOCUMENT:
 
 with st.sidebar:
 
-    st.title("📚 AI Study Assistant")
+    st.title("📚 PaperIQ")
 
     st.caption(
-        "Upload your study material and "
-        "learn with AI."
+        "Research Paper Analyzer"
     )
-
 
     st.divider()
 
-
-    uploaded_file = st.file_uploader(
-
-        "Upload PDF",
-
-        type=["pdf"],
-
-        help="Upload your textbook, notes or study material."
-
+    page = st.radio(
+        "Navigation",
+        [
+            "🏠 Dashboard",
+            "📤 Analyze Paper",
+            "📝 Summary",
+            "🔍 Keywords",
+            "📊 Analytics",
+            "❓ Ask Paper",
+            "🔗 Compare Papers",
+            "📋 Paper Sections",
+            "ℹ️ About"
+        ]
     )
 
 
-    if uploaded_file:
+# =========================================================
+# DASHBOARD
+# =========================================================
 
-        if (
-            st.session_state.file_name
-            != uploaded_file.name
-        ):
+if page == "🏠 Dashboard":
 
-            with st.spinner(
-                "Processing PDF..."
-            ):
+    st.markdown(
+        """
+        <div class="hero">
 
-                success, message = (
-                    process_pdf(uploaded_file)
-                )
+        <h1>📚 PaperIQ</h1>
 
+        <p>
+        Research Paper Analysis & NLP Assistant
+        </p>
 
-            if success:
+        <p>
+        Upload academic papers, analyze their content,
+        extract keywords, study important sections,
+        compare documents and understand research papers.
+        </p>
 
-                st.success(message)
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
 
-            else:
+    if not st.session_state.document_text:
 
-                st.error(message)
-
-
-    st.divider()
-
-
-    if st.session_state.document_text:
-
-        word_count = len(
-            st.session_state.document_text.split()
+        st.info(
+            "Go to **Analyze Paper** and upload "
+            "a research paper to get started."
         )
 
-        chunk_count = len(
-            st.session_state.chunks
+        st.markdown(
+            """
+            ### ✨ Features
+
+            | Feature | Description |
+            |---|---|
+            | 📄 Paper Parsing | Extract text from PDF/DOCX/TXT |
+            | 📝 Summary | Generate paper summary |
+            | 🔍 Keywords | Find important research keywords |
+            | 📊 TF-IDF | Analyze important terms |
+            | ❓ Ask Paper | Ask questions from paper |
+            | 🔗 Compare | Compare two documents |
+            | 📋 Sections | Detect research sections |
+            | 📥 PDF Report | Download analysis report |
+            """
         )
 
+    else:
 
-        st.subheader("📊 Document Info")
+        stats = st.session_state.document_stats
 
+        cols = st.columns(4)
 
-        col1, col2 = st.columns(2)
-
-
-        with col1:
-
-            st.metric(
+        metrics = [
+            (
                 "Words",
-                f"{word_count:,}"
-            )
-
-
-        with col2:
-
-            st.metric(
-                "Chunks",
-                chunk_count
-            )
-
-
-        st.caption(
-            f"📄 {st.session_state.file_name}"
-        )
-
-
-    st.divider()
-
-
-    st.subheader("💡 How to use")
-
-    st.markdown(
-        """
-        1. Upload a PDF
-        2. Ask questions
-        3. Generate summary
-        4. Find important topics
-        5. Generate MCQs
-        6. Take a quiz
-        """
-    )
-
-
-# =========================================================
-# MAIN HEADER
-# =========================================================
-
-st.title("📚 AI Study Assistant")
-
-st.markdown(
-    """
-    <div class="subtitle">
-    Your personal AI-powered study partner for
-    questions, summaries, MCQs, important topics
-    and interactive quizzes.
-    </div>
-    """,
-    unsafe_allow_html=True
-)
-
-
-# =========================================================
-# DOCUMENT NOT UPLOADED
-# =========================================================
-
-if not st.session_state.document_text:
-
-    st.info(
-        "👈 Please upload a PDF from the sidebar "
-        "to start studying."
-    )
-
-    st.markdown(
-        """
-        ### ✨ Features
-
-        | Feature | Description |
-        |---|---|
-        | 💬 Ask Questions | Ask questions from your PDF |
-        | 📝 Summary | Generate a study summary |
-        | 🎯 Important Topics | Find important exam topics |
-        | ❓ MCQ Generator | Generate MCQs from your PDF |
-        | 🧠 Quiz | Take an interactive quiz |
-        """
-    )
-
-    st.stop()
-
-
-# =========================================================
-# STAT CARDS
-# =========================================================
-
-word_count = len(
-    st.session_state.document_text.split()
-)
-
-chunk_count = len(
-    st.session_state.chunks
-)
-
-
-col1, col2, col3, col4 = st.columns(4)
-
-
-with col1:
-
-    st.markdown(
-        f"""
-        <div class="stat-box">
-            <div class="stat-number">
-                📄
-            </div>
-            <div class="stat-label">
-                Document
-            </div>
-        </div>
-        """,
-        unsafe_allow_html=True
-    )
-
-
-with col2:
-
-    st.markdown(
-        f"""
-        <div class="stat-box">
-            <div class="stat-number">
-                {word_count:,}
-            </div>
-            <div class="stat-label">
-                Words
-            </div>
-        </div>
-        """,
-        unsafe_allow_html=True
-    )
-
-
-with col3:
-
-    st.markdown(
-        f"""
-        <div class="stat-box">
-            <div class="stat-number">
-                {chunk_count}
-            </div>
-            <div class="stat-label">
-                Search Chunks
-            </div>
-        </div>
-        """,
-        unsafe_allow_html=True
-    )
-
-
-with col4:
-
-    st.markdown(
-        """
-        <div class="stat-box">
-            <div class="stat-number">
-                🤖
-            </div>
-            <div class="stat-label">
-                Gemini AI
-            </div>
-        </div>
-        """,
-        unsafe_allow_html=True
-    )
-
-
-st.write("")
-
-
-# =========================================================
-# TABS
-# =========================================================
-
-tab1, tab2, tab3, tab4, tab5 = st.tabs(
-    [
-        "💬 Ask Questions",
-        "📝 Summary",
-        "❓ MCQ Generator",
-        "🎯 Important Topics",
-        "🧠 Quiz"
-    ]
-)
-
-
-# =========================================================
-# TAB 1 — ASK QUESTIONS
-# =========================================================
-
-with tab1:
-
-    st.subheader("💬 Ask Questions")
-
-    st.write(
-        "Ask anything related to the uploaded PDF."
-    )
-
-
-    question = st.text_area(
-
-        "Your Question",
-
-        placeholder=(
-            "Example: What is Natural Language Processing?"
-        ),
-
-        height=120
-
-    )
-
-
-    if st.button(
-        "🤖 Ask AI",
-        type="primary",
-        use_container_width=True
-    ):
-
-        if not question.strip():
-
-            st.warning(
-                "Please enter a question."
-            )
-
-        else:
-
-            with st.spinner(
-                "Thinking..."
-            ):
-
-                answer = answer_question(
-                    question
+                f"{stats.get('Words', 0):,}"
+            ),
+            (
+                "Sentences",
+                stats.get(
+                    "Sentences",
+                    0
                 )
-
-
-            st.session_state.last_answer = answer
-
-
-    if st.session_state.last_answer:
-
-        st.markdown(
-            "### 🤖 Answer"
-        )
-
-
-        st.markdown(
-            f"""
-            <div class="answer-box">
-            {st.session_state.last_answer}
-            </div>
-            """,
-            unsafe_allow_html=True
-        )
-
-
-# =========================================================
-# TAB 2 — SUMMARY
-# =========================================================
-
-with tab2:
-
-    st.subheader("📝 Document Summary")
-
-    st.write(
-        "Generate a simple study-friendly summary."
-    )
-
-
-    if st.button(
-        "📝 Generate Summary",
-        type="primary"
-    ):
-
-        with st.spinner(
-            "Generating summary..."
-        ):
-
-            summary = generate_summary()
-
-
-        st.session_state.summary = summary
-
-
-    if st.session_state.summary:
-
-        st.markdown(
-            st.session_state.summary
-        )
-
-
-# =========================================================
-# TAB 3 — MCQ GENERATOR
-# =========================================================
-
-with tab3:
-
-    st.subheader("❓ MCQ Generator")
-
-    st.write(
-        "Generate multiple-choice questions "
-        "from your document."
-    )
-
-
-    number_of_mcqs = st.slider(
-
-        "Number of Questions",
-
-        min_value=5,
-
-        max_value=20,
-
-        value=10
-
-    )
-
-
-    if st.button(
-        "✨ Generate MCQs",
-        type="primary"
-    ):
-
-        with st.spinner(
-            "Generating MCQs..."
-        ):
-
-            mcqs = generate_mcqs(
-                number_of_mcqs
-            )
-
-
-        st.session_state.mcqs = mcqs
-
-
-    if st.session_state.mcqs:
-
-        st.success(
-            f"{len(st.session_state.mcqs)} "
-            "questions generated."
-        )
-
-
-        for i, mcq in enumerate(
-            st.session_state.mcqs,
-            start=1
-        ):
-
-            st.markdown(
-                f"### Q{i}. {mcq.get('question', '')}"
-            )
-
-
-            options = mcq.get(
-                "options",
-                []
-            )
-
-
-            for option in options:
-
-                st.write(
-                    f"○ {option}"
+            ),
+            (
+                "Keywords",
+                len(
+                    st.session_state.keywords
                 )
-
-
-            with st.expander(
-                "View Answer & Explanation"
-            ):
-
-                st.success(
-                    f"Correct Answer: "
-                    f"{mcq.get('answer', '')}"
+            ),
+            (
+                "Sections",
+                len(
+                    st.session_state.sections
                 )
+            )
+        ]
 
-
-                st.info(
-                    mcq.get(
-                        "explanation",
-                        ""
-                    )
-                )
-
-
-            st.divider()
-
-
-# =========================================================
-# TAB 4 — IMPORTANT TOPICS
-# =========================================================
-
-with tab4:
-
-    st.subheader(
-        "🎯 Important Topics"
-    )
-
-    st.write(
-        "Find the topics that are most "
-        "important for study and exam preparation."
-    )
-
-
-    if st.button(
-        "🎯 Find Important Topics",
-        type="primary"
-    ):
-
-        with st.spinner(
-            "Analyzing document..."
+        for col, (label, value) in zip(
+            cols,
+            metrics
         ):
 
-            topics = generate_topics()
-
-
-        st.session_state.topics = topics
-
-
-    if st.session_state.topics:
-
-        for i, item in enumerate(
-            st.session_state.topics,
-            start=1
-        ):
-
-            topic = item.get(
-                "topic",
-                "Unknown Topic"
-            )
-
-            reason = item.get(
-                "reason",
-                ""
-            )
-
-
-            st.markdown(
+            col.markdown(
                 f"""
-                <div class="topic-box">
+                <div class="kpi">
 
-                <strong>
-                {i}. {topic}
-                </strong>
+                <div class="kpi-label">
+                {label}
+                </div>
 
-                <br><br>
-
-                {reason}
+                <div class="kpi-value">
+                {value}
+                </div>
 
                 </div>
                 """,
@@ -1225,356 +866,725 @@ with tab4:
 
 
 # =========================================================
-# TAB 5 — QUIZ
+# ANALYZE PAPER
 # =========================================================
 
-with tab5:
+elif page == "📤 Analyze Paper":
 
-    st.subheader("🧠 Interactive Quiz")
-
-    st.write(
-        "Test your knowledge using questions "
-        "generated from the uploaded document."
+    st.title(
+        "📤 Analyze Research Paper"
     )
 
+    uploaded_file = st.file_uploader(
+        "Upload Research Paper",
+        type=[
+            "pdf",
+            "docx",
+            "txt"
+        ]
+    )
 
-    # -----------------------------------------------------
-    # START QUIZ
-    # -----------------------------------------------------
+    if st.button(
+        "🚀 Analyze Paper",
+        type="primary",
+        use_container_width=True
+    ):
 
-    if not st.session_state.quiz_started:
+        if not uploaded_file:
 
-        if st.button(
-            "🚀 Start Quiz",
-            type="primary",
-            use_container_width=True
+            st.error(
+                "Please upload a research paper."
+            )
+
+            st.stop()
+
+        with st.spinner(
+            "Reading and analyzing document..."
         ):
 
-            with st.spinner(
-                "Preparing your quiz..."
-            ):
+            raw_text = extract_text(
+                uploaded_file
+            )
 
-                quiz = generate_mcqs(10)
+            text = clean_text(
+                raw_text
+            )
+
+            if not text:
+
+                st.error(
+                    "Could not extract readable text."
+                )
+
+                st.stop()
+
+            sections = extract_sections(
+                raw_text
+            )
+
+            keywords = extract_keywords(
+                text
+            )
+
+            stats = calculate_statistics(
+                text
+            )
+
+            tfidf_df = tfidf_keywords(
+                text
+            )
+
+            st.session_state.document_text = text
+
+            st.session_state.file_name = (
+                uploaded_file.name
+            )
+
+            st.session_state.sections = sections
+
+            st.session_state.keywords = keywords
+
+            st.session_state.document_stats = stats
+
+            st.session_state.analysis_df = (
+                tfidf_df
+            )
+
+            st.session_state.summary = ""
+
+            st.session_state.question_answer = ""
+
+        st.success(
+            "Research paper analyzed successfully!"
+        )
+
+        st.write("")
+
+        cols = st.columns(4)
+
+        for col, (key, value) in zip(
+            cols,
+            stats.items()
+        ):
+
+            col.metric(
+                key,
+                f"{value:,}"
+                if isinstance(value, int)
+                else value
+            )
 
 
-            if quiz:
+# =========================================================
+# SUMMARY
+# =========================================================
 
-                random.shuffle(quiz)
+elif page == "📝 Summary":
 
+    st.title(
+        "📝 Research Paper Summary"
+    )
 
-                st.session_state.quiz = quiz
+    if not st.session_state.document_text:
 
-                st.session_state.quiz_index = 0
+        st.info(
+            "Analyze a paper first."
+        )
 
-                st.session_state.quiz_score = 0
+    else:
 
-                st.session_state.quiz_finished = False
+        st.write(
+            f"📄 {st.session_state.file_name}"
+        )
 
-                st.session_state.quiz_started = True
+        if st.button(
+            "✨ Generate Summary",
+            type="primary"
+        ):
 
-                st.session_state.last_quiz_answer = None
+            # Simple extractive summary
+            text = st.session_state.document_text
 
-                st.session_state.quiz_submitted = False
+            sentences = re.split(
+                r"(?<=[.!?])\s+",
+                text
+            )
 
-                st.rerun()
+            sentences = [
+                s.strip()
+                for s in sentences
+                if len(s.strip()) > 40
+            ]
+
+            if sentences:
+
+                vectorizer = TfidfVectorizer(
+                    stop_words="english"
+                )
+
+                matrix = vectorizer.fit_transform(
+                    sentences
+                )
+
+                scores = matrix.sum(
+                    axis=1
+                ).A1
+
+                count = min(
+                    8,
+                    len(sentences)
+                )
+
+                indices = scores.argsort()[
+                    -count:
+                ][::-1]
+
+                selected = [
+                    sentences[i]
+                    for i in sorted(indices)
+                ]
+
+                summary = "\n\n".join(
+                    selected
+                )
+
+                st.session_state.summary = (
+                    summary
+                )
 
             else:
 
+                st.session_state.summary = (
+                    "Not enough text available "
+                    "for summary."
+                )
+
+        if st.session_state.summary:
+
+            st.markdown(
+                "### 📖 Summary"
+            )
+
+            st.write(
+                st.session_state.summary
+            )
+
+
+# =========================================================
+# KEYWORDS
+# =========================================================
+
+elif page == "🔍 Keywords":
+
+    st.title(
+        "🔍 Important Research Keywords"
+    )
+
+    if not st.session_state.document_text:
+
+        st.info(
+            "Analyze a paper first."
+        )
+
+    else:
+
+        keywords = (
+            st.session_state.keywords
+        )
+
+        if keywords:
+
+            df = pd.DataFrame(
+                keywords
+            )
+
+            st.dataframe(
+                df,
+                use_container_width=True,
+                hide_index=True
+            )
+
+            st.subheader(
+                "📊 Keyword Frequency"
+            )
+
+            st.bar_chart(
+                df.set_index(
+                    "Keyword"
+                )["Frequency"]
+            )
+
+        else:
+
+            st.warning(
+                "No predefined research keywords found."
+            )
+
+
+# =========================================================
+# ANALYTICS
+# =========================================================
+
+elif page == "📊 Analytics":
+
+    st.title(
+        "📊 Paper Analytics"
+    )
+
+    if not st.session_state.document_text:
+
+        st.info(
+            "Analyze a paper first."
+        )
+
+    else:
+
+        stats = (
+            st.session_state.document_stats
+        )
+
+        st.subheader(
+            "📈 Document Statistics"
+        )
+
+        df_stats = pd.DataFrame(
+            {
+                "Metric": list(
+                    stats.keys()
+                ),
+                "Value": list(
+                    stats.values()
+                )
+            }
+        )
+
+        st.dataframe(
+            df_stats,
+            use_container_width=True,
+            hide_index=True
+        )
+
+        st.subheader(
+            "🔤 Top TF-IDF Terms"
+        )
+
+        tfidf_df = (
+            st.session_state.analysis_df
+        )
+
+        if tfidf_df is not None:
+
+            st.dataframe(
+                tfidf_df,
+                use_container_width=True,
+                hide_index=True
+            )
+
+            st.bar_chart(
+                tfidf_df.set_index(
+                    "Term"
+                )["TF-IDF Score"]
+            )
+
+
+# =========================================================
+# ASK PAPER
+# =========================================================
+
+elif page == "❓ Ask Paper":
+
+    st.title(
+        "❓ Ask Questions About Paper"
+    )
+
+    if not st.session_state.document_text:
+
+        st.info(
+            "Analyze a paper first."
+        )
+
+    else:
+
+        question = st.text_area(
+            "Your Question",
+            placeholder=(
+                "Example: What is the main objective "
+                "of this research?"
+            ),
+            height=130
+        )
+
+        if st.button(
+            "🔎 Find Answer",
+            type="primary"
+        ):
+
+            if not question.strip():
+
+                st.warning(
+                    "Please enter a question."
+                )
+
+            else:
+
+                text = (
+                    st.session_state.document_text
+                )
+
+                paragraphs = re.split(
+                    r"(?<=[.!?])\s+",
+                    text
+                )
+
+                paragraphs = [
+                    p.strip()
+                    for p in paragraphs
+                    if p.strip()
+                ]
+
+                if paragraphs:
+
+                    try:
+
+                        vectorizer = TfidfVectorizer(
+                            stop_words="english",
+                            ngram_range=(1, 2)
+                        )
+
+                        matrix = vectorizer.fit_transform(
+                            paragraphs
+                        )
+
+                        query_vector = (
+                            vectorizer.transform(
+                                [question]
+                            )
+                        )
+
+                        scores = cosine_similarity(
+                            query_vector,
+                            matrix
+                        )[0]
+
+                        top_indices = scores.argsort()[
+                            -5:
+                        ][::-1]
+
+                        answers = []
+
+                        for index in top_indices:
+
+                            if scores[index] > 0:
+
+                                answers.append(
+                                    paragraphs[index]
+                                )
+
+                        if answers:
+
+                            st.session_state.question_answer = (
+                                "\n\n".join(
+                                    answers[:3]
+                                )
+                            )
+
+                        else:
+
+                            st.session_state.question_answer = (
+                                "No relevant information "
+                                "was found in the paper."
+                            )
+
+                    except Exception:
+
+                        st.session_state.question_answer = (
+                            "Could not analyze the question."
+                        )
+
+        if st.session_state.question_answer:
+
+            st.subheader(
+                "📖 Relevant Information"
+            )
+
+            st.write(
+                st.session_state.question_answer
+            )
+
+
+# =========================================================
+# COMPARE PAPERS
+# =========================================================
+
+elif page == "🔗 Compare Papers":
+
+    st.title(
+        "🔗 Compare Research Papers"
+    )
+
+    if not st.session_state.document_text:
+
+        st.info(
+            "Analyze your first paper before comparison."
+        )
+
+    else:
+
+        st.write(
+            f"Current Paper: "
+            f"**{st.session_state.file_name}**"
+        )
+
+        second_file = st.file_uploader(
+            "Upload second paper",
+            type=[
+                "pdf",
+                "docx",
+                "txt"
+            ],
+            key="second_paper"
+        )
+
+        if st.button(
+            "🔗 Compare Documents",
+            type="primary"
+        ):
+
+            if not second_file:
+
                 st.error(
-                    "Could not generate quiz."
+                    "Please upload a second paper."
+                )
+
+            else:
+
+                second_text = clean_text(
+                    extract_text(
+                        second_file
+                    )
+                )
+
+                if not second_text:
+
+                    st.error(
+                        "Could not read second paper."
+                    )
+
+                else:
+
+                    similarity = calculate_similarity(
+                        st.session_state.document_text,
+                        second_text
+                    )
+
+                    st.session_state.similarity = (
+                        similarity
+                    )
+
+                    st.session_state.comparison_text = (
+                        second_text
+                    )
+
+        if st.session_state.similarity is not None:
+
+            similarity = (
+                st.session_state.similarity
+            )
+
+            st.metric(
+                "Text Similarity",
+                f"{similarity:.2f}%"
+            )
+
+            st.progress(
+                min(
+                    similarity / 100,
+                    1.0
+                )
+            )
+
+            if similarity >= 70:
+
+                st.warning(
+                    "The two documents contain "
+                    "a high level of textual similarity."
+                )
+
+            elif similarity >= 40:
+
+                st.info(
+                    "The documents have moderate "
+                    "textual similarity."
+                )
+
+            else:
+
+                st.success(
+                    "The documents have relatively "
+                    "low textual similarity."
                 )
 
 
-    # -----------------------------------------------------
-    # QUIZ ACTIVE
-    # -----------------------------------------------------
+# =========================================================
+# PAPER SECTIONS
+# =========================================================
 
-    if (
-        st.session_state.quiz_started
-        and not st.session_state.quiz_finished
-    ):
+elif page == "📋 Paper Sections":
 
-        quiz = st.session_state.quiz
+    st.title(
+        "📋 Research Paper Sections"
+    )
 
-        current_index = (
-            st.session_state.quiz_index
+    if not st.session_state.document_text:
+
+        st.info(
+            "Analyze a paper first."
         )
 
+    else:
 
-        if current_index < len(quiz):
+        sections = (
+            st.session_state.sections
+        )
 
-            current_question = quiz[
-                current_index
-            ]
+        if not sections:
 
-
-            total_questions = len(quiz)
-
-
-            st.progress(
-                current_index / total_questions
+            st.warning(
+                "Standard research sections "
+                "could not be detected."
             )
 
+        else:
 
-            st.caption(
-                f"Question "
-                f"{current_index + 1} "
-                f"of {total_questions}"
-            )
+            for section, content in sections.items():
 
-
-            st.markdown(
-                f"""
-                ## Q{current_index + 1}. 
-                {current_question.get('question', '')}
-                """
-            )
-
-
-            options = current_question.get(
-                "options",
-                []
-            )
-
-
-            selected_option = st.radio(
-
-                "Select your answer:",
-
-                options,
-
-                key=f"quiz_option_{current_index}"
-
-            )
-
-
-            # ------------------------------------------------
-            # SUBMIT ANSWER
-            # ------------------------------------------------
-
-            if not st.session_state.quiz_submitted:
-
-                if st.button(
-                    "✅ Submit Answer",
-                    type="primary"
+                with st.expander(
+                    f"📌 {section}",
+                    expanded=False
                 ):
 
-                    correct_answer = (
-                        current_question.get(
-                            "answer",
-                            ""
-                        )
-                    )
+                    if content:
 
-
-                    if selected_option == correct_answer:
-
-                        st.session_state.quiz_score += 1
-
-                        st.session_state.last_quiz_answer = (
-                            "correct"
+                        st.write(
+                            content
                         )
 
                     else:
 
-                        st.session_state.last_quiz_answer = (
-                            "wrong"
+                        st.caption(
+                            "No content found."
                         )
 
 
-                    st.session_state.quiz_submitted = True
+# =========================================================
+# ABOUT
+# =========================================================
 
-                    st.rerun()
-
-
-            # ------------------------------------------------
-            # SHOW FEEDBACK
-            # ------------------------------------------------
-
-            if st.session_state.quiz_submitted:
-
-                correct_answer = (
-                    current_question.get(
-                        "answer",
-                        ""
-                    )
-                )
-
-
-                if (
-                    st.session_state.last_quiz_answer
-                    == "correct"
-                ):
-
-                    st.success(
-                        "🎉 Correct Answer!"
-                    )
-
-                else:
-
-                    st.error(
-                        "❌ Incorrect Answer"
-                    )
-
-
-                    st.info(
-                        f"Correct answer: "
-                        f"{correct_answer}"
-                    )
-
-
-                explanation = (
-                    current_question.get(
-                        "explanation",
-                        ""
-                    )
-                )
-
-
-                if explanation:
-
-                    st.write(
-                        f"💡 {explanation}"
-                    )
-
-
-                st.write("")
-
-
-                if current_index + 1 < total_questions:
-
-                    if st.button(
-                        "➡️ Next Question",
-                        use_container_width=True
-                    ):
-
-                        st.session_state.quiz_index += 1
-
-                        st.session_state.quiz_submitted = False
-
-                        st.session_state.last_quiz_answer = None
-
-                        st.rerun()
-
-                else:
-
-                    if st.button(
-                        "🏁 Finish Quiz",
-                        use_container_width=True
-                    ):
-
-                        st.session_state.quiz_finished = True
-
-                        st.rerun()
-
-
-    # -----------------------------------------------------
-    # QUIZ RESULT
-    # -----------------------------------------------------
-
-    if (
-        st.session_state.quiz_started
-        and st.session_state.quiz_finished
-    ):
-
-        total = len(
-            st.session_state.quiz
-        )
-
-
-        score = st.session_state.quiz_score
-
-
-        if total > 0:
-
-            accuracy = (
-                score / total
-            ) * 100
-
-        else:
-
-            accuracy = 0
-
-
-        st.success(
-            "🎉 Quiz Completed!"
-        )
-
-
-        col1, col2, col3 = st.columns(3)
-
-
-        with col1:
-
-            st.metric(
-                "Score",
-                f"{score}/{total}"
-            )
-
-
-        with col2:
-
-            st.metric(
-                "Accuracy",
-                f"{accuracy:.1f}%"
-            )
-
-
-        with col3:
-
-            st.metric(
-                "Questions",
-                total
-            )
-
-
-        st.divider()
-
-
-        st.subheader(
-            "📖 Quiz Review"
-        )
-
-
-        for i, question in enumerate(
-            st.session_state.quiz,
-            start=1
-        ):
-
-            st.markdown(
-                f"**Q{i}. {question.get('question', '')}**"
-            )
-
-
-            st.write(
-                f"✅ Correct Answer: "
-                f"{question.get('answer', '')}"
-            )
-
-
-        st.write("")
-
-
-        if st.button(
-            "🔄 Take Another Quiz",
-            type="primary"
-        ):
-
-            st.session_state.quiz = []
-
-            st.session_state.quiz_index = 0
-
-            st.session_state.quiz_score = 0
-
-            st.session_state.quiz_finished = False
-
-            st.session_state.quiz_started = False
-
-            st.session_state.last_quiz_answer = None
-
-            st.session_state.quiz_submitted = False
-
-            st.rerun()
+elif page == "ℹ️ About":
+
+    st.title(
+        "ℹ️ About PaperIQ"
+    )
+
+    st.markdown(
+        """
+        **PaperIQ** is an NLP-based Research Paper
+        Analysis application.
+
+        It helps students and researchers understand
+        academic papers using traditional NLP and
+        machine learning techniques.
+
+        ### 🚀 Features
+
+        - PDF / DOCX / TXT processing
+        - Research section detection
+        - Important keyword extraction
+        - TF-IDF analysis
+        - Text similarity
+        - Extractive summarization
+        - Question-based document search
+        - Paper comparison
+        - PDF report generation
+
+        ### 🛠️ Technology
+
+        **Python**
+
+        **Streamlit**
+
+        **Pandas**
+
+        **Scikit-learn**
+
+        **PyPDF**
+
+        **python-docx**
+
+        **ReportLab**
+
+        ### 🧠 NLP Techniques
+
+        - Text preprocessing
+        - TF-IDF
+        - Cosine Similarity
+        - Keyword extraction
+        - Extractive summarization
+        - Information retrieval
+
+        ### ⚠️ Note
+
+        The application provides automated text analysis
+        and should be used as a research/study assistant,
+        not as a replacement for human academic judgment.
+        """
+    )
+
+
+# =========================================================
+# DOWNLOAD REPORT
+# =========================================================
+
+if (
+    st.session_state.document_text
+    and page in [
+        "🏠 Dashboard",
+        "📊 Analytics",
+        "📋 Paper Sections"
+    ]
+):
+
+    st.divider()
+
+    st.subheader(
+        "📥 Download Analysis Report"
+    )
+
+    pdf_report = create_pdf_report(
+        st.session_state.file_name,
+        st.session_state.document_stats,
+        st.session_state.sections,
+        st.session_state.keywords,
+        st.session_state.analysis_df
+        if st.session_state.analysis_df is not None
+        else pd.DataFrame(),
+        st.session_state.similarity
+    )
+
+    safe_name = re.sub(
+        r"[^A-Za-z0-9_-]",
+        "_",
+        os.path.splitext(
+            st.session_state.file_name
+        )[0]
+    )
+
+    st.download_button(
+        "📄 Download PDF Report",
+        pdf_report,
+        file_name=f"{safe_name}_analysis_report.pdf",
+        mime="application/pdf"
+    )
 
 
 # =========================================================
@@ -1583,11 +1593,15 @@ with tab5:
 
 st.markdown(
     """
-    <div class="footer">
+    <div style="
+        text-align:center;
+        padding:25px;
+        color:#777;
+    ">
 
-    📚 AI Study Assistant  
+    📚 PaperIQ  
     <br>
-    Powered by Python • Streamlit • Gemini AI
+    Research Paper Analyzer • NLP + Machine Learning
 
     </div>
     """,
